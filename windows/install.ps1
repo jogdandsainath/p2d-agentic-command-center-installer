@@ -5,7 +5,7 @@
 
 .DESCRIPTION
   Run this once on a new Windows machine to:
-  1. Install the required AI CLI tool (Codex / Claude / Copilot gh extension)
+  1. Install or verify the required AI CLI tool
   2. Set machine-level environment variables
   3. Register the machine with the Pur2Divin Command Center
   4. Install a Windows Scheduled Task to run the squad runner on login
@@ -51,7 +51,7 @@ param(
   [string]$ServiceUrl = "",
   [string]$Secret = "",
   [string]$Actor = "",
-  [string]$HostKey = $env:COMPUTERNAME,
+  [string]$HostKey = "",
   [switch]$NoDaemon
 )
 
@@ -92,6 +92,13 @@ if (-not $Squad) { $Squad = Read-Host "Squad key" }
 if (-not $Runtime) { $Runtime = Read-Host "AI runtime (codex, claude, copilot, cursor, service)" }
 if ($Runtime -notin @("codex","claude","copilot","cursor","service")) { throw "Unsupported runtime: $Runtime" }
 if (-not $ProductKey -or -not $Squad -or -not $Actor -or -not $Secret) { throw "Product, squad, user ID, and enrollment token are required." }
+if (-not $HostKey) { $HostKey = [Environment]::MachineName }
+$HostKey = ($HostKey -replace "[^A-Za-z0-9._-]", "-").Trim("-").ToLowerInvariant()
+if (-not $HostKey) {
+  $machineGuid = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Cryptography" -Name MachineGuid -ErrorAction SilentlyContinue).MachineGuid
+  if ($machineGuid) { $HostKey = "win-$($machineGuid.Replace('-', '').Substring(0, 12).ToLowerInvariant())" }
+}
+if (-not $HostKey) { $HostKey = "win-$([Guid]::NewGuid().ToString('N').Substring(0, 12))" }
 
 $secretBytes = New-Object byte[] 32
 $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
@@ -162,8 +169,13 @@ switch ($Runtime) {
       winget install GitHub.cli --silent --accept-package-agreements --accept-source-agreements 2>$null | Out-Null
       if (Test-Command "gh") { success "GitHub CLI installed." } else { warn "gh install failed. Install from https://cli.github.com" }
     } else { success "GitHub CLI already installed." }
-    gh extension install github/gh-copilot 2>$null | Out-Null
-    success "GitHub Copilot CLI extension ready."
+    cmd /c "gh copilot --help >nul 2>&1"
+    if ($LASTEXITCODE -eq 0) {
+      success "GitHub Copilot command is available."
+    } else {
+      warn "GitHub Copilot CLI command was not detected."
+      warn "Authenticate GitHub CLI with 'gh auth login' and confirm Copilot access for this account."
+    }
   }
   "cursor" {
     if (Test-Command "cursor") {

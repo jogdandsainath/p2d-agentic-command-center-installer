@@ -163,9 +163,12 @@ case "$RUNTIME_TYPE" in
   copilot)
     install_node
     install_gh_cli
-    info "Verifying GitHub Copilot extension …"
-    gh extension install github/gh-copilot 2>/dev/null || true
-    success "GitHub Copilot CLI ready."
+    if gh copilot --help >/dev/null 2>&1; then
+      success "GitHub Copilot command is available."
+    else
+      warn "GitHub Copilot CLI command was not detected."
+      warn "Run 'gh auth login' and confirm Copilot access for this account."
+    fi
     ;;
   cursor)
     if command -v cursor &>/dev/null; then

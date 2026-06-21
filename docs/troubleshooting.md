@@ -35,7 +35,9 @@ npm install -g @openai/codex
 npm install -g @anthropic-ai/claude-code
 
 # GitHub CLI (macOS)
-brew install gh && gh extension install github/gh-copilot
+brew install gh
+gh auth login
+gh copilot --help
 ```
 
 ---
