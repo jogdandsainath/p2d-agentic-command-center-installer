@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# E-Divin Machine Onboarding Script — Cross-Platform (macOS / Linux)
+# Pur2Divin Machine Onboarding - macOS / Linux
 # =============================================================================
 # Usage:
 #   curl -fsSL https://e-divin-agent-communication-service.vercel.app/install.sh | bash
@@ -8,14 +8,14 @@
 #   bash scripts/onboard-machine.sh --squad ui-squad --runtime claude --product e-divin-eos
 #
 # Required env vars (or passed as flags):
-#   E_DIVIN_AGENT_SERVICE_URL  — service base URL
+#   P2D_COMMAND_CENTER_URL     — Command Center base URL
 #   SERVICE_SHARED_SECRET      — bearer token
-#   E_DIVIN_ACTOR              — your GitHub username
+#   P2D_ACTOR                  — organization user ID
 #
 # Flags:
 #   --squad    SQUAD_KEY      squad to join (required)
-#   --runtime  RUNTIME_TYPE   codex | claude | copilot | service (required)
-#   --product  PRODUCT_KEY    product key (default: e-divin-eos)
+#   --runtime  RUNTIME_TYPE   codex | claude | copilot | cursor | service
+#   --product  PRODUCT_KEY    product workspace key (required)
 #   --host     HOST_KEY       machine host key (default: hostname)
 #   --url      SERVICE_URL    override service URL
 #   --no-daemon               skip installing background runner daemon
@@ -25,21 +25,21 @@ set -euo pipefail
 # ── Defaults ──────────────────────────────────────────────────────────────────
 SQUAD_KEY=""
 RUNTIME_TYPE=""
-PRODUCT_KEY="e-divin-eos"
+PRODUCT_KEY=""
 HOST_KEY="$(hostname -s 2>/dev/null || hostname)"
-SERVICE_URL="${E_DIVIN_AGENT_SERVICE_URL:-https://e-divin-agent-communication-service.vercel.app}"
-SECRET="${SERVICE_SHARED_SECRET:-}"
-ACTOR="${E_DIVIN_ACTOR:-}"
+SERVICE_URL="${P2D_COMMAND_CENTER_URL:-https://www.thep2d.com/p2d-command-center}"
+SECRET="${P2D_ENROLLMENT_TOKEN:-${SERVICE_SHARED_SECRET:-}}"
+ACTOR="${P2D_ACTOR:-}"
 NO_DAEMON=false
 OS="$(uname -s)"   # Darwin | Linux
 ARCH="$(uname -m)" # x86_64 | arm64
 
 # ── Colours ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
-info()    { echo -e "${CYAN}[e-divin]${NC} $*"; }
-success() { echo -e "${GREEN}[e-divin]${NC} $*"; }
-warn()    { echo -e "${YELLOW}[e-divin]${NC} $*"; }
-error()   { echo -e "${RED}[e-divin]${NC} $*" >&2; exit 1; }
+info()    { echo -e "${CYAN}[p2d]${NC} $*"; }
+success() { echo -e "${GREEN}[p2d]${NC} $*"; }
+warn()    { echo -e "${YELLOW}[p2d]${NC} $*"; }
+error()   { echo -e "${RED}[p2d]${NC} $*" >&2; exit 1; }
 
 # ── Parse args ────────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -55,16 +55,27 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ -z "$SQUAD_KEY" ]]   && error "--squad is required (e.g. --squad ui-squad)"
-[[ -z "$RUNTIME_TYPE" ]] && error "--runtime is required: codex | claude | copilot | service"
-[[ -z "$SECRET" ]]       && error "Set SERVICE_SHARED_SECRET env var before running."
-[[ -z "$ACTOR" ]]        && ACTOR="$(git config user.name 2>/dev/null || echo 'founder')"
+[[ -z "$PRODUCT_KEY" ]] && read -r -p "Product workspace key: " PRODUCT_KEY
+[[ -z "$SQUAD_KEY" ]] && read -r -p "Squad key: " SQUAD_KEY
+[[ -z "$RUNTIME_TYPE" ]] && read -r -p "AI runtime (codex, claude, copilot, cursor, service): " RUNTIME_TYPE
+[[ -z "$ACTOR" ]] && read -r -p "Organization user ID: " ACTOR
+if [[ -z "$SECRET" ]]; then
+  read -r -s -p "Command Center enrollment token: " SECRET
+  echo ""
+fi
+[[ "$RUNTIME_TYPE" =~ ^(codex|claude|copilot|cursor|service)$ ]] || error "Unsupported runtime: $RUNTIME_TYPE"
+[[ -z "$PRODUCT_KEY" || -z "$SQUAD_KEY" || -z "$ACTOR" || -z "$SECRET" ]] && error "Product, squad, user ID, and enrollment token are required."
 
 SERVICE_URL="${SERVICE_URL%/}"
-INSTALL_DIR="$HOME/.e-divin"
+INSTALL_DIR="$HOME/.pur2divin"
 mkdir -p "$INSTALL_DIR/inbox/$SQUAD_KEY" "$INSTALL_DIR/outbox/$SQUAD_KEY" "$INSTALL_DIR/runtime"
 
-info "E-Divin Machine Onboarding"
+MACHINE_SECRET="$(openssl rand -base64 32 2>/dev/null || (umask 077; dd if=/dev/urandom bs=32 count=1 2>/dev/null | base64))"
+RUNTIME_API="$RUNTIME_TYPE"
+[[ "$RUNTIME_TYPE" == "copilot" ]] && RUNTIME_API="github_action"
+[[ "$RUNTIME_TYPE" == "cursor" ]] && RUNTIME_API="other"
+
+info "Pur2Divin Machine Onboarding"
 info "  OS:      $OS $ARCH"
 info "  Squad:   $SQUAD_KEY"
 info "  Runtime: $RUNTIME_TYPE"
@@ -156,6 +167,14 @@ case "$RUNTIME_TYPE" in
     gh extension install github/gh-copilot 2>/dev/null || true
     success "GitHub Copilot CLI ready."
     ;;
+  cursor)
+    if command -v cursor &>/dev/null; then
+      success "Cursor command-line launcher detected."
+    else
+      warn "Cursor is not installed or its shell command is unavailable."
+      warn "Install Cursor, then enable its shell command from the Cursor command palette."
+    fi
+    ;;
   service)
     install_node
     ;;
@@ -165,15 +184,22 @@ esac
 info "Step 2: Writing environment configuration …"
 ENV_FILE="$INSTALL_DIR/env"
 cat > "$ENV_FILE" <<EOF
-# E-Divin environment — sourced by runner daemon
+# Pur2Divin environment sourced by the runner daemon
+export P2D_COMMAND_CENTER_URL="$SERVICE_URL"
+export P2D_ACTOR="$ACTOR"
+export P2D_SQUAD_KEY="$SQUAD_KEY"
+export P2D_RUNTIME="$RUNTIME_TYPE"
+export P2D_PRODUCT_KEY="$PRODUCT_KEY"
+export P2D_MACHINE_SECRET="$MACHINE_SECRET"
+export P2D_LOCAL_INBOX_ROOT="$INSTALL_DIR/inbox"
+export P2D_LOCAL_OUTBOX_ROOT="$INSTALL_DIR/outbox"
+export P2D_LOCAL_RUNTIME_ROOT="$INSTALL_DIR/runtime"
+# Legacy aliases keep existing runner contracts compatible.
 export E_DIVIN_AGENT_SERVICE_URL="$SERVICE_URL"
 export E_DIVIN_ACTOR="$ACTOR"
 export E_DIVIN_SQUAD_KEY="$SQUAD_KEY"
 export E_DIVIN_RUNTIME_TYPE="$RUNTIME_TYPE"
 export E_DIVIN_PRODUCT_KEY="$PRODUCT_KEY"
-export E_DIVIN_LOCAL_INBOX_ROOT="$INSTALL_DIR/inbox"
-export E_DIVIN_LOCAL_OUTBOX_ROOT="$INSTALL_DIR/outbox"
-export E_DIVIN_LOCAL_RUNTIME_ROOT="$INSTALL_DIR/runtime"
 # SERVICE_SHARED_SECRET must already be set in your shell profile (do not store here)
 EOF
 success "Env config written to $ENV_FILE"
@@ -181,15 +207,15 @@ success "Env config written to $ENV_FILE"
 # Add to shell profile if not already there
 SHELL_PROFILE="$HOME/.bashrc"
 [[ "$SHELL" == *"zsh"* ]] && SHELL_PROFILE="$HOME/.zshrc"
-if ! grep -q "e-divin/env" "$SHELL_PROFILE" 2>/dev/null; then
+if ! grep -q ".pur2divin/env" "$SHELL_PROFILE" 2>/dev/null; then
   echo "" >> "$SHELL_PROFILE"
-  echo "# E-Divin agent runtime" >> "$SHELL_PROFILE"
+  echo "# Pur2Divin agent runtime" >> "$SHELL_PROFILE"
   echo "[[ -f $ENV_FILE ]] && source $ENV_FILE" >> "$SHELL_PROFILE"
   success "Shell profile updated: $SHELL_PROFILE"
 fi
 
 # ── Step 3: Register machine with service ────────────────────────────────────
-info "Step 3: Registering machine with E-Divin service …"
+info "Step 3: Registering machine with Pur2Divin Command Center ..."
 REG_BODY=$(cat <<JSON
 {
   "hostKey": "$HOST_KEY",
@@ -197,7 +223,7 @@ REG_BODY=$(cat <<JSON
   "hostType": "desktop",
   "squadKey": "$SQUAD_KEY",
   "squadDisplayName": "$SQUAD_KEY on $HOST_KEY",
-  "runtimeType": "$RUNTIME_TYPE",
+  "runtimeType": "$RUNTIME_API",
   "locationHint": "$RUNTIME_TYPE on $OS $ARCH",
   "productKey": "$PRODUCT_KEY"
 }
@@ -215,10 +241,10 @@ info "Step 4: Writing background runner …"
 RUNNER_SCRIPT="$INSTALL_DIR/runner.sh"
 cat > "$RUNNER_SCRIPT" <<'RUNNER'
 #!/usr/bin/env bash
-# E-Divin background runner — polls for commands and dispatches to local agent
+# Pur2Divin background runner - polls for commands and dispatches to the local agent tool
 set -uo pipefail
 
-INSTALL_DIR="$HOME/.e-divin"
+INSTALL_DIR="$HOME/.pur2divin"
 ENV_FILE="$INSTALL_DIR/env"
 LOG_FILE="$INSTALL_DIR/runner.log"
 [[ -f "$ENV_FILE" ]] && source "$ENV_FILE"
@@ -251,7 +277,7 @@ heartbeat() {
     "{\"squadKey\":\"$SQUAD\",\"runtimeType\":\"$RUNTIME\",\"status\":\"active\",\"message\":\"$(date '+%H:%M:%S') $RUNTIME runner polling\",\"productKey\":\"$PRODUCT\"}" >/dev/null
 }
 
-log "E-Divin $RUNTIME runner started (squad: $SQUAD, product: $PRODUCT)"
+log "Pur2Divin $RUNTIME runner started (squad: $SQUAD, product: $PRODUCT)"
 
 while true; do
   heartbeat
@@ -290,13 +316,13 @@ if [[ "$NO_DAEMON" == "false" ]]; then
 
   if [[ "$OS" == "Darwin" ]]; then
     # launchd plist
-    PLIST_PATH="$HOME/Library/LaunchAgents/com.e-divin.runner-$SQUAD_KEY.plist"
+    PLIST_PATH="$HOME/Library/LaunchAgents/com.pur2divin.runner-$PRODUCT_KEY-$SQUAD_KEY.plist"
     cat > "$PLIST_PATH" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key>         <string>com.e-divin.runner-$SQUAD_KEY</string>
+  <key>Label</key>         <string>com.pur2divin.runner-$PRODUCT_KEY-$SQUAD_KEY</string>
   <key>ProgramArguments</key>
   <array><string>/bin/bash</string><string>$RUNNER_SCRIPT</string></array>
   <key>EnvironmentVariables</key>
@@ -312,16 +338,16 @@ if [[ "$NO_DAEMON" == "false" ]]; then
 </dict>
 </plist>
 PLIST
-    launchctl load "$PLIST_PATH" 2>/dev/null && success "launchd daemon loaded: com.e-divin.runner-$SQUAD_KEY" \
+    launchctl load "$PLIST_PATH" 2>/dev/null && success "launchd daemon loaded for $PRODUCT_KEY / $SQUAD_KEY" \
       || warn "launchctl load failed — run manually: bash $RUNNER_SCRIPT &"
 
   elif [[ "$OS" == "Linux" ]]; then
     # systemd user unit
     mkdir -p "$HOME/.config/systemd/user"
-    UNIT_FILE="$HOME/.config/systemd/user/e-divin-runner-${SQUAD_KEY}.service"
+    UNIT_FILE="$HOME/.config/systemd/user/pur2divin-runner-${PRODUCT_KEY}-${SQUAD_KEY}.service"
     cat > "$UNIT_FILE" <<UNIT
 [Unit]
-Description=E-Divin Squad Runner ($SQUAD_KEY - $RUNTIME_TYPE)
+Description=Pur2Divin Runner ($PRODUCT_KEY / $SQUAD_KEY / $RUNTIME_TYPE)
 After=network-online.target
 
 [Service]
@@ -336,8 +362,8 @@ Environment=HOME=$HOME
 WantedBy=default.target
 UNIT
     systemctl --user daemon-reload 2>/dev/null || true
-    systemctl --user enable --now "e-divin-runner-${SQUAD_KEY}.service" 2>/dev/null \
-      && success "systemd user service enabled: e-divin-runner-${SQUAD_KEY}" \
+    systemctl --user enable --now "pur2divin-runner-${PRODUCT_KEY}-${SQUAD_KEY}.service" 2>/dev/null \
+      && success "systemd user service enabled for $PRODUCT_KEY / $SQUAD_KEY" \
       || warn "systemd enable failed — run manually: bash $RUNNER_SCRIPT &"
   fi
 else
@@ -347,16 +373,16 @@ fi
 
 # ── Step 6: Publish onboarding heartbeat ────────────────────────────────────
 svc_post "/automation/runner-heartbeat" \
-  "{\"squadKey\":\"$SQUAD_KEY\",\"runtimeType\":\"$RUNTIME_TYPE\",\"status\":\"active\",\"message\":\"Machine onboarded: $HOST_KEY ($OS $RUNTIME_TYPE)\",\"productKey\":\"$PRODUCT_KEY\"}" >/dev/null || true
+  "{\"squadKey\":\"$SQUAD_KEY\",\"runtimeType\":\"$RUNTIME_API\",\"status\":\"active\",\"message\":\"Machine onboarded: $HOST_KEY ($OS $RUNTIME_TYPE)\",\"productKey\":\"$PRODUCT_KEY\"}" >/dev/null || true
 
 echo ""
 success "═══════════════════════════════════════════════"
-success " E-Divin machine onboarding complete!"
+success " Pur2Divin machine onboarding complete!"
 success " Squad:   $SQUAD_KEY"
 success " Runtime: $RUNTIME_TYPE"
 success " Product: $PRODUCT_KEY"
 success " Logs:    $INSTALL_DIR/runner.log"
 success "═══════════════════════════════════════════════"
 echo ""
-warn  "ACTION: Add SERVICE_SHARED_SECRET to your shell profile (~/.bashrc or ~/.zshrc)"
-warn  "  export SERVICE_SHARED_SECRET='your-secret-here'"
+success " Machine identity secret generated for this workspace."
+warn  "Keep the enrollment token private. Rotate it from Command Center if this machine is retired."

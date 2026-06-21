@@ -1,0 +1,23 @@
+{
+  "name": "@pur2divin/agentic-command-center-installer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Product-aware Pur2Divin Agentic Command Center machine installer.",
+  "type": "module",
+  "bin": {
+    "p2d-install": "./bin/p2d-install.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "bin",
+    "windows",
+    "mac-linux",
+    "docs",
+    "README.md"
+  ],
+  "scripts": {
+    "check": "node --check bin/p2d-install.mjs"
+  }
+}
