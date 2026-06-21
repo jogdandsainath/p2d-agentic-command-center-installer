@@ -21,7 +21,10 @@ The installer asks for:
 | Input | Meaning |
 |---|---|
 | Product workspace key | The single product this runner serves |
+| Product ID | Immutable product identity supplied by Command Center |
 | Squad key | The squad receiving commands |
+| Squad ID | Immutable product-squad identity supplied by Command Center |
+| Release / wave | Isolates commands and evidence for the active delivery scope |
 | Runtime | Codex, Claude, Copilot, Cursor, or service |
 | User ID | Human or service owner recorded in audit evidence |
 | Enrollment token | Secret supplied by Command Center |

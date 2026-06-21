@@ -30,8 +30,12 @@ console.log("\nPur2Divin Agentic Command Center Installer");
 console.log("One machine. One product workspace. One governed squad.\n");
 
 const product = await value("product", "Product workspace key", process.env.P2D_PRODUCT_KEY);
+const productId = await value("product-id", "Product ID", process.env.P2D_PRODUCT_ID);
 const squad = await value("squad", "Squad key", process.env.P2D_SQUAD_KEY);
+const squadId = await value("squad-id", "Squad ID", process.env.P2D_SQUAD_ID);
+const release = await value("release", "Release or wave key", process.env.P2D_RELEASE_KEY || "current");
 const runtime = (await value("runtime", "Runtime (codex, claude, copilot, cursor, service)", process.env.P2D_RUNTIME)).toLowerCase();
+const machine = args.get("machine") || process.env.P2D_MACHINE_KEY || "";
 const actor = await value("actor", "Organization user ID", process.env.P2D_ACTOR);
 const serviceUrl = await value(
   "url",
@@ -45,8 +49,8 @@ const token = await value(
 );
 await rl.close();
 
-if (!product || !squad || !actor || !token) {
-  console.error("Product, squad, user ID, and enrollment token are required.");
+if (!product || !productId || !squad || !squadId || !release || !actor || !token) {
+  console.error("Product ID/key, squad ID/key, release, user ID, and enrollment token are required.");
   process.exit(1);
 }
 if (!supportedRuntimes.has(runtime)) {
@@ -69,8 +73,14 @@ const scriptArgs = isWindows
       script,
       "-ProductKey",
       product,
+      "-ProductId",
+      productId,
       "-Squad",
       squad,
+      "-SquadId",
+      squadId,
+      "-ReleaseKey",
+      release,
       "-Runtime",
       runtime,
       "-Actor",
@@ -78,20 +88,28 @@ const scriptArgs = isWindows
       "-ServiceUrl",
       serviceUrl,
       "-Secret",
-      token
+      token,
+      ...(machine ? ["-HostKey", machine] : [])
     ]
   : [
       script,
       "--product",
       product,
+      "--product-id",
+      productId,
       "--squad",
       squad,
+      "--squad-id",
+      squadId,
+      "--release",
+      release,
       "--runtime",
       runtime,
       "--actor",
       actor,
       "--url",
-      serviceUrl
+      serviceUrl,
+      ...(machine ? ["--host", machine] : [])
     ];
 
 const result = spawnSync(command, scriptArgs, {
@@ -101,7 +119,10 @@ const result = spawnSync(command, scriptArgs, {
     P2D_ENROLLMENT_TOKEN: token,
     P2D_ACTOR: actor,
     P2D_PRODUCT_KEY: product,
+    P2D_PRODUCT_ID: productId,
     P2D_SQUAD_KEY: squad,
+    P2D_SQUAD_ID: squadId,
+    P2D_RELEASE_KEY: release,
     P2D_RUNTIME: runtime,
     P2D_COMMAND_CENTER_URL: serviceUrl
   }

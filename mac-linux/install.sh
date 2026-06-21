@@ -26,6 +26,9 @@ set -euo pipefail
 SQUAD_KEY=""
 RUNTIME_TYPE=""
 PRODUCT_KEY=""
+PRODUCT_ID=""
+SQUAD_ID=""
+RELEASE_KEY="current"
 HOST_KEY="$(hostname -s 2>/dev/null || hostname)"
 SERVICE_URL="${P2D_COMMAND_CENTER_URL:-https://www.thep2d.com/p2d-command-center}"
 SECRET="${P2D_ENROLLMENT_TOKEN:-${SERVICE_SHARED_SECRET:-}}"
@@ -47,6 +50,9 @@ while [[ $# -gt 0 ]]; do
     --squad)    SQUAD_KEY="$2";   shift 2 ;;
     --runtime)  RUNTIME_TYPE="$2"; shift 2 ;;
     --product)  PRODUCT_KEY="$2"; shift 2 ;;
+    --product-id) PRODUCT_ID="$2"; shift 2 ;;
+    --squad-id) SQUAD_ID="$2"; shift 2 ;;
+    --release) RELEASE_KEY="$2"; shift 2 ;;
     --host)     HOST_KEY="$2";    shift 2 ;;
     --url)      SERVICE_URL="$2"; shift 2 ;;
     --actor)    ACTOR="$2";       shift 2 ;;
@@ -56,7 +62,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -z "$PRODUCT_KEY" ]] && read -r -p "Product workspace key: " PRODUCT_KEY
+[[ -z "$PRODUCT_ID" ]] && read -r -p "Product ID: " PRODUCT_ID
 [[ -z "$SQUAD_KEY" ]] && read -r -p "Squad key: " SQUAD_KEY
+[[ -z "$SQUAD_ID" ]] && read -r -p "Squad ID: " SQUAD_ID
 [[ -z "$RUNTIME_TYPE" ]] && read -r -p "AI runtime (codex, claude, copilot, cursor, service): " RUNTIME_TYPE
 [[ -z "$ACTOR" ]] && read -r -p "Organization user ID: " ACTOR
 if [[ -z "$SECRET" ]]; then
@@ -64,11 +72,14 @@ if [[ -z "$SECRET" ]]; then
   echo ""
 fi
 [[ "$RUNTIME_TYPE" =~ ^(codex|claude|copilot|cursor|service)$ ]] || error "Unsupported runtime: $RUNTIME_TYPE"
-[[ -z "$PRODUCT_KEY" || -z "$SQUAD_KEY" || -z "$ACTOR" || -z "$SECRET" ]] && error "Product, squad, user ID, and enrollment token are required."
+[[ -z "$PRODUCT_KEY" || -z "$PRODUCT_ID" || -z "$SQUAD_KEY" || -z "$SQUAD_ID" || -z "$RELEASE_KEY" || -z "$ACTOR" || -z "$SECRET" ]] && error "Product ID/key, squad ID/key, release, user ID, and enrollment token are required."
 
 SERVICE_URL="${SERVICE_URL%/}"
 INSTALL_DIR="$HOME/.pur2divin"
-mkdir -p "$INSTALL_DIR/inbox/$SQUAD_KEY" "$INSTALL_DIR/outbox/$SQUAD_KEY" "$INSTALL_DIR/runtime"
+SAFE_RELEASE="$(printf '%s' "$RELEASE_KEY" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | tr '[:upper:]' '[:lower:]')"
+[[ -z "$SAFE_RELEASE" ]] && SAFE_RELEASE="current"
+WORKSPACE_ROOT="$INSTALL_DIR/workspaces/$PRODUCT_KEY/$SAFE_RELEASE/$SQUAD_KEY/$RUNTIME_TYPE/$HOST_KEY"
+mkdir -p "$WORKSPACE_ROOT/config" "$WORKSPACE_ROOT/inbox" "$WORKSPACE_ROOT/outbox" "$WORKSPACE_ROOT/runtime" "$WORKSPACE_ROOT/logs"
 
 MACHINE_SECRET="$(openssl rand -base64 32 2>/dev/null || (umask 077; dd if=/dev/urandom bs=32 count=1 2>/dev/null | base64))"
 RUNTIME_API="$RUNTIME_TYPE"
@@ -80,7 +91,9 @@ info "  OS:      $OS $ARCH"
 info "  Squad:   $SQUAD_KEY"
 info "  Runtime: $RUNTIME_TYPE"
 info "  Product: $PRODUCT_KEY"
+info "  Release: $RELEASE_KEY"
 info "  Host:    $HOST_KEY"
+info "  Folder:  $WORKSPACE_ROOT"
 info "  Service: $SERVICE_URL"
 echo ""
 
@@ -185,7 +198,7 @@ esac
 
 # ── Step 2: Write env config ──────────────────────────────────────────────────
 info "Step 2: Writing environment configuration …"
-ENV_FILE="$INSTALL_DIR/env"
+ENV_FILE="$WORKSPACE_ROOT/config/env"
 cat > "$ENV_FILE" <<EOF
 # Pur2Divin environment sourced by the runner daemon
 export P2D_COMMAND_CENTER_URL="$SERVICE_URL"
@@ -193,10 +206,14 @@ export P2D_ACTOR="$ACTOR"
 export P2D_SQUAD_KEY="$SQUAD_KEY"
 export P2D_RUNTIME="$RUNTIME_TYPE"
 export P2D_PRODUCT_KEY="$PRODUCT_KEY"
+export P2D_PRODUCT_ID="$PRODUCT_ID"
+export P2D_SQUAD_ID="$SQUAD_ID"
+export P2D_RELEASE_KEY="$RELEASE_KEY"
 export P2D_MACHINE_SECRET="$MACHINE_SECRET"
-export P2D_LOCAL_INBOX_ROOT="$INSTALL_DIR/inbox"
-export P2D_LOCAL_OUTBOX_ROOT="$INSTALL_DIR/outbox"
-export P2D_LOCAL_RUNTIME_ROOT="$INSTALL_DIR/runtime"
+export P2D_WORKSPACE_ROOT="$WORKSPACE_ROOT"
+export P2D_LOCAL_INBOX_ROOT="$WORKSPACE_ROOT/inbox"
+export P2D_LOCAL_OUTBOX_ROOT="$WORKSPACE_ROOT/outbox"
+export P2D_LOCAL_RUNTIME_ROOT="$WORKSPACE_ROOT/runtime"
 # Legacy aliases keep existing runner contracts compatible.
 export E_DIVIN_AGENT_SERVICE_URL="$SERVICE_URL"
 export E_DIVIN_ACTOR="$ACTOR"
@@ -241,15 +258,15 @@ fi
 
 # ── Step 4: Write runner script ───────────────────────────────────────────────
 info "Step 4: Writing background runner …"
-RUNNER_SCRIPT="$INSTALL_DIR/runner.sh"
+RUNNER_SCRIPT="$WORKSPACE_ROOT/runtime/runner.sh"
 cat > "$RUNNER_SCRIPT" <<'RUNNER'
 #!/usr/bin/env bash
 # Pur2Divin background runner - polls for commands and dispatches to the local agent tool
 set -uo pipefail
 
-INSTALL_DIR="$HOME/.pur2divin"
-ENV_FILE="$INSTALL_DIR/env"
-LOG_FILE="$INSTALL_DIR/runner.log"
+INSTALL_DIR="${P2D_WORKSPACE_ROOT:-$HOME/.pur2divin}"
+ENV_FILE="$INSTALL_DIR/config/env"
+LOG_FILE="$INSTALL_DIR/logs/runner.log"
 [[ -f "$ENV_FILE" ]] && source "$ENV_FILE"
 
 SERVICE_URL="${E_DIVIN_AGENT_SERVICE_URL:-}"
@@ -336,8 +353,8 @@ if [[ "$NO_DAEMON" == "false" ]]; then
   </dict>
   <key>RunAtLoad</key>     <true/>
   <key>KeepAlive</key>     <true/>
-  <key>StandardOutPath</key><string>$INSTALL_DIR/runner.log</string>
-  <key>StandardErrorPath</key><string>$INSTALL_DIR/runner-err.log</string>
+  <key>StandardOutPath</key><string>$WORKSPACE_ROOT/logs/runner.log</string>
+  <key>StandardErrorPath</key><string>$WORKSPACE_ROOT/logs/runner-err.log</string>
 </dict>
 </plist>
 PLIST
@@ -384,7 +401,8 @@ success " Pur2Divin machine onboarding complete!"
 success " Squad:   $SQUAD_KEY"
 success " Runtime: $RUNTIME_TYPE"
 success " Product: $PRODUCT_KEY"
-success " Logs:    $INSTALL_DIR/runner.log"
+success " Release: $RELEASE_KEY"
+success " Folder:  $WORKSPACE_ROOT"
 success "═══════════════════════════════════════════════"
 echo ""
 success " Machine identity secret generated for this workspace."

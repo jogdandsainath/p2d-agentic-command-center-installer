@@ -112,6 +112,25 @@ service
 
 Each installation is product- and squad-bound. Switching products requires a separate registration or a governed ownership transfer from Command Center.
 
+The generated Command Center command includes the product ID/key, squad ID/key,
+release or wave, and agentic tool. The installer detects the target OS and
+machine identity and creates:
+
+```text
+Pur2Divin/
+  workspaces/
+    <product-key>/
+      <release-key>/
+        <squad-key>/
+          <agentic-tool>/
+            <machine-key>/
+              config/
+              inbox/
+              outbox/
+              runtime/
+              logs/
+```
+
 ## Verification
 
 After installation:

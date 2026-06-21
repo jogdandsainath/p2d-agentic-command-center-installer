@@ -48,6 +48,9 @@ param(
   [string]$Squad = "",
   [string]$Runtime = "",
   [string]$ProductKey = "",
+  [string]$ProductId = "",
+  [string]$SquadId = "",
+  [string]$ReleaseKey = "current",
   [string]$ServiceUrl = "",
   [string]$Secret = "",
   [string]$Actor = "",
@@ -58,7 +61,7 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot  = Split-Path -Parent $PSScriptRoot
 $installDir = Join-Path $env:LOCALAPPDATA "Pur2Divin"
-New-Item -ItemType Directory -Force -Path "$installDir\inbox\$Squad","$installDir\outbox\$Squad","$installDir\runtime" | Out-Null
+New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
 function info    { param($m) Write-Host "[p2d] $m" -ForegroundColor Cyan }
 function success { param($m) Write-Host "[p2d] $m" -ForegroundColor Green }
@@ -88,10 +91,12 @@ if (-not $Actor) {
 }
 
 if (-not $ProductKey) { $ProductKey = Read-Host "Product workspace key" }
+if (-not $ProductId) { $ProductId = Read-Host "Product ID" }
 if (-not $Squad) { $Squad = Read-Host "Squad key" }
+if (-not $SquadId) { $SquadId = Read-Host "Squad ID" }
 if (-not $Runtime) { $Runtime = Read-Host "AI runtime (codex, claude, copilot, cursor, service)" }
 if ($Runtime -notin @("codex","claude","copilot","cursor","service")) { throw "Unsupported runtime: $Runtime" }
-if (-not $ProductKey -or -not $Squad -or -not $Actor -or -not $Secret) { throw "Product, squad, user ID, and enrollment token are required." }
+if (-not $ProductKey -or -not $ProductId -or -not $Squad -or -not $SquadId -or -not $ReleaseKey -or -not $Actor -or -not $Secret) { throw "Product ID/key, squad ID/key, release, user ID, and enrollment token are required." }
 if (-not $HostKey) { $HostKey = [Environment]::MachineName }
 $HostKey = ($HostKey -replace "[^A-Za-z0-9._-]", "-").Trim("-").ToLowerInvariant()
 if (-not $HostKey) {
@@ -99,6 +104,11 @@ if (-not $HostKey) {
   if ($machineGuid) { $HostKey = "win-$($machineGuid.Replace('-', '').Substring(0, 12).ToLowerInvariant())" }
 }
 if (-not $HostKey) { $HostKey = "win-$([Guid]::NewGuid().ToString('N').Substring(0, 12))" }
+$safeRelease = ($ReleaseKey -replace "[^A-Za-z0-9._-]", "-").Trim("-").ToLowerInvariant()
+if (-not $safeRelease) { $safeRelease = "current" }
+$workspaceRoot = Join-Path $installDir "workspaces\$ProductKey\$safeRelease\$Squad\$Runtime\$HostKey"
+New-Item -ItemType Directory -Force -Path `
+  "$workspaceRoot\config","$workspaceRoot\inbox","$workspaceRoot\outbox","$workspaceRoot\runtime","$workspaceRoot\logs" | Out-Null
 
 $secretBytes = New-Object byte[] 32
 $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
@@ -126,7 +136,9 @@ info "Pur2Divin Machine Onboarding"
 info "  Squad:   $Squad"
 info "  Runtime: $Runtime"
 info "  Product: $ProductKey"
+info "  Release: $ReleaseKey"
 info "  Host:    $HostKey"
+info "  Folder:  $workspaceRoot"
 info "  Service: $ServiceUrl"
 Write-Host ""
 
@@ -196,10 +208,14 @@ $machineVars = @{
   P2D_SQUAD_KEY          = $Squad
   P2D_RUNTIME            = $Runtime
   P2D_PRODUCT_KEY        = $ProductKey
+  P2D_PRODUCT_ID         = $ProductId
+  P2D_SQUAD_ID           = $SquadId
+  P2D_RELEASE_KEY        = $ReleaseKey
   P2D_MACHINE_SECRET     = $machineSecret
-  P2D_LOCAL_INBOX_ROOT   = "$installDir\inbox"
-  P2D_LOCAL_OUTBOX_ROOT  = "$installDir\outbox"
-  P2D_LOCAL_RUNTIME_ROOT = "$installDir\runtime"
+  P2D_WORKSPACE_ROOT     = $workspaceRoot
+  P2D_LOCAL_INBOX_ROOT   = "$workspaceRoot\inbox"
+  P2D_LOCAL_OUTBOX_ROOT  = "$workspaceRoot\outbox"
+  P2D_LOCAL_RUNTIME_ROOT = "$workspaceRoot\runtime"
   # Legacy aliases keep existing runners compatible during migration.
   E_DIVIN_AGENT_SERVICE_URL = $ServiceUrl
   E_DIVIN_ACTOR             = $Actor
@@ -236,7 +252,7 @@ else { warn "Registration response: $($reg | ConvertTo-Json -Compress) (may alre
 # ── Step 4: Install Scheduled Task background runner ─────────────────────────
 if (-not $NoDaemon) {
   info "Step 4: Installing Scheduled Task runner …"
-  $runnerRoot = Join-Path $installDir "runner"
+  $runnerRoot = Join-Path $workspaceRoot "runtime"
   New-Item -ItemType Directory -Force -Path $runnerRoot | Out-Null
   $runnerPath = Join-Path $runnerRoot "machine-runner.ps1"
   $configPath = Join-Path $runnerRoot "config.json"
@@ -245,8 +261,11 @@ if (-not $NoDaemon) {
   [ordered]@{
     serviceUrl = $ServiceUrl
     productKey = $ProductKey
+    productId = $ProductId
     hostKey = $HostKey
     squadKey = $Squad
+    squadId = $SquadId
+    releaseKey = $ReleaseKey
     runtimeType = $runtimeType
     runtimeTool = $Runtime
     actor = $Actor
@@ -254,6 +273,7 @@ if (-not $NoDaemon) {
     localDevelopment = $false
     encryptedToken = $encryptedToken
     machineSecret = $machineSecret
+    workspaceRoot = $workspaceRoot
     installedAt = (Get-Date).ToString("o")
   } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $configPath -Encoding UTF8
 
@@ -294,7 +314,8 @@ success " Pur2Divin Windows onboarding complete!"
 success " Squad:   $Squad"
 success " Runtime: $Runtime"
 success " Product: $ProductKey"
-success " Logs:    $installDir\runner.log"
+success " Release: $ReleaseKey"
+success " Folder:  $workspaceRoot"
 success "═══════════════════════════════════════════════"
 Write-Host ""
 success " Machine identity secret generated and stored for this user."
