@@ -14,7 +14,7 @@
     "bin",
     "windows",
     "mac-linux",
-    "docs",
+    "docs/installation-guide.md",
     "README.md"
   ],
   "scripts": {

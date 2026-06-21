@@ -123,7 +123,7 @@ After installation:
 5. Send a low-risk test command to that squad.
 6. Confirm the command reaches the local inbox and reports evidence back.
 
-See [docs/installation-guide.md](docs/installation-guide.md) for the full operator procedure and [docs/troubleshooting.md](docs/troubleshooting.md) for recovery steps.
+See [docs/installation-guide.md](docs/installation-guide.md) for the full operator procedure, verification checklist, security rules, and recovery sequence.
 
 ## Compatibility
 
