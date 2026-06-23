@@ -270,6 +270,9 @@ INSTALL_DIR="${P2D_WORKSPACE_ROOT:-$HOME/.pur2divin}"
 ENV_FILE="$INSTALL_DIR/config/env"
 LOG_FILE="$INSTALL_DIR/logs/runner.log"
 [[ -f "$ENV_FILE" ]] && source "$ENV_FILE"
+TOOL_EVENT_DIR="$INSTALL_DIR/hooks/events"
+VISIBLE_SESSION_INBOX="$INSTALL_DIR/inbox/visible-sessions"
+mkdir -p "$TOOL_EVENT_DIR" "$VISIBLE_SESSION_INBOX"
 
 SERVICE_URL="${E_DIVIN_AGENT_SERVICE_URL:-}"
 SECRET="${SERVICE_SHARED_SECRET:-}"
@@ -299,10 +302,54 @@ heartbeat() {
     "{\"squadKey\":\"$SQUAD\",\"runtimeType\":\"$RUNTIME\",\"status\":\"active\",\"message\":\"$(date '+%H:%M:%S') $RUNTIME runner polling\",\"productKey\":\"$PRODUCT\"}" >/dev/null
 }
 
+process_tool_events() {
+  find "$TOOL_EVENT_DIR" -maxdepth 1 -type f -name '*.json' 2>/dev/null | sort | while read -r EVENT_FILE; do
+    EVENT_LINE=$(python3 - "$EVENT_FILE" <<'PY' 2>/dev/null
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as f:
+    data = json.load(f)
+fields = [
+    data.get("tool") or data.get("runtimeTool") or "agent-tool",
+    data.get("runtimeTool") or data.get("runtimeType") or "",
+    data.get("runtimeType") or "",
+    data.get("productKey") or "",
+    data.get("squadKey") or "",
+    data.get("hostKey") or "",
+    data.get("workspaceRoot") or "",
+    data.get("promptPath") or "",
+]
+print("\t".join(str(x) for x in fields))
+PY
+)
+    if [[ -z "$EVENT_LINE" ]]; then
+      mv "$EVENT_FILE" "$EVENT_FILE.failed" 2>/dev/null || true
+      continue
+    fi
+    IFS=$'\t' read -r TOOL RUNTIME_TOOL EVENT_RUNTIME EVENT_PRODUCT EVENT_SQUAD EVENT_HOST EVENT_WORKSPACE EVENT_PROMPT <<< "$EVENT_LINE"
+    [[ -z "$EVENT_PRODUCT" ]] && EVENT_PRODUCT="$PRODUCT"
+    [[ -z "$EVENT_SQUAD" ]] && EVENT_SQUAD="$SQUAD"
+    [[ -z "$EVENT_RUNTIME" ]] && EVENT_RUNTIME="$RUNTIME"
+    [[ -z "$RUNTIME_TOOL" ]] && RUNTIME_TOOL="$RUNTIME"
+    [[ -z "$EVENT_HOST" ]] && EVENT_HOST="$(hostname -s 2>/dev/null || hostname)"
+    [[ -z "$EVENT_WORKSPACE" ]] && EVENT_WORKSPACE="$INSTALL_DIR"
+    [[ -z "$EVENT_PROMPT" ]] && EVENT_PROMPT="$INSTALL_DIR/hooks/visible-session-startup-prompt.md"
+    SESSION_KEY="tool:$EVENT_PRODUCT:$EVENT_SQUAD:$RUNTIME_TOOL:$EVENT_HOST"
+    PACKET_PATH="$VISIBLE_SESSION_INBOX/$(date '+%Y%m%d-%H%M%S')-${RUNTIME_TOOL}.json"
+    cat > "$PACKET_PATH" <<JSON
+{"sessionKey":"$SESSION_KEY","productKey":"$EVENT_PRODUCT","squadKey":"$EVENT_SQUAD","runtimeType":"$EVENT_RUNTIME","runtimeTool":"$RUNTIME_TOOL","hostKey":"$EVENT_HOST","tool":"$TOOL","promptPath":"$EVENT_PROMPT","workspaceRoot":"$EVENT_WORKSPACE","instruction":"Open or continue the visible $TOOL session with the governed prompt at promptPath. Report evidence back through Command Center."}
+JSON
+    svc POST /automation/runner-heartbeat "{\"squadKey\":\"$EVENT_SQUAD\",\"runtimeType\":\"$EVENT_RUNTIME\",\"status\":\"active\",\"message\":\"Tool launch detected locally by squad runner: $TOOL\",\"productKey\":\"$EVENT_PRODUCT\",\"metadata\":{\"runtimeTool\":\"$RUNTIME_TOOL\",\"promptPath\":\"$EVENT_PROMPT\",\"packetPath\":\"$PACKET_PATH\",\"source\":\"local_tool_hook\"}}" >/dev/null
+    svc POST /runtime-sessions "{\"sessionKey\":\"$SESSION_KEY\",\"displayName\":\"$RUNTIME_TOOL visible session - $EVENT_PRODUCT / $EVENT_SQUAD\",\"agentKey\":\"local-squad-automation-runner-agent\",\"squadKey\":\"$EVENT_SQUAD\",\"runtimeType\":\"$EVENT_RUNTIME\",\"hostKey\":\"$EVENT_HOST\",\"sessionStatus\":\"active\",\"sessionRef\":\"$TOOL startup hook via local runner\",\"memoryPath\":\"$EVENT_WORKSPACE/config\",\"promptPath\":\"$EVENT_PROMPT\",\"inboxPath\":\"$EVENT_WORKSPACE/inbox\",\"lastPromptSummary\":\"Local squad runner registered visible session from tool startup hook.\",\"latestResponseSummary\":\"Runner wake and local prompt packet completed.\",\"adapterStatus\":\"local_hook_bridge_active\",\"productKey\":\"$EVENT_PRODUCT\"}" >/dev/null
+    log "Tool launch routed by runner: $TOOL -> $SESSION_KEY"
+    mv "$EVENT_FILE" "$EVENT_FILE.processed" 2>/dev/null || true
+  done
+}
+
 log "Pur2Divin $RUNTIME runner started (squad: $SQUAD, product: $PRODUCT)"
 
 while true; do
   heartbeat
+  process_tool_events
 
   # Fetch queued commands for this squad
   FEED=$(svc GET "/automation/runner-feed?squadKey=$SQUAD&productKey=$PRODUCT" "")
@@ -445,6 +492,8 @@ WORKSPACE_ROOT="${P2D_WORKSPACE_ROOT:-$HOME/.pur2divin}"
 ENV_FILE="$WORKSPACE_ROOT/config/env"
 HOOK_ENV="$WORKSPACE_ROOT/hooks/tool-env"
 LOG_FILE="$WORKSPACE_ROOT/logs/tool-hook.log"
+EVENT_ROOT="$WORKSPACE_ROOT/hooks/events"
+mkdir -p "$EVENT_ROOT"
 [[ -f "$ENV_FILE" ]] && source "$ENV_FILE"
 [[ -f "$HOOK_ENV" ]] && source "$HOOK_ENV"
 SERVICE_URL="${P2D_COMMAND_CENTER_URL:-${E_DIVIN_AGENT_SERVICE_URL:-}}"
@@ -467,6 +516,11 @@ svc_post() {
     "${SERVICE_URL%/}$path" >/dev/null 2>>"$LOG_FILE" || true
 }
 
+EVENT_PATH="$EVENT_ROOT/$(date '+%Y%m%d-%H%M%S%3N')-$TOOL.json"
+cat > "$EVENT_PATH" <<JSON
+{"tool":"$TOOL","runtimeTool":"$RUNTIME","runtimeType":"$RUNTIME","productKey":"$PRODUCT","squadKey":"$SQUAD","hostKey":"$HOST","workspaceRoot":"$WORKSPACE_ROOT","promptPath":"$P2D_VISIBLE_SESSION_PROMPT","source":"tool_startup_hook","createdAt":"$(date -u '+%Y-%m-%dT%H:%M:%SZ')"}
+JSON
+
 if command -v systemctl >/dev/null 2>&1; then
   systemctl --user start "pur2divin-runner-${PRODUCT}-${SQUAD}.service" >/dev/null 2>&1 || true
 fi
@@ -474,9 +528,7 @@ if command -v launchctl >/dev/null 2>&1; then
   launchctl kickstart "gui/$(id -u)/com.pur2divin.runner-${PRODUCT}-${SQUAD}" >/dev/null 2>&1 || true
 fi
 
-svc_post "/automation/runner-heartbeat" "{\"squadKey\":\"$SQUAD\",\"runtimeType\":\"$RUNTIME\",\"status\":\"active\",\"message\":\"Tool capability hook started: $TOOL on $HOST\",\"productKey\":\"$PRODUCT\"}"
-svc_post "/runtime-sessions" "{\"sessionKey\":\"tool:$PRODUCT:$SQUAD:$RUNTIME:$HOST\",\"displayName\":\"$RUNTIME visible session - $PRODUCT / $SQUAD\",\"agentKey\":\"local-squad-automation-runner-agent\",\"squadKey\":\"$SQUAD\",\"runtimeType\":\"$RUNTIME\",\"hostKey\":\"$HOST\",\"sessionStatus\":\"active\",\"sessionRef\":\"$TOOL startup hook\",\"memoryPath\":\"$WORKSPACE_ROOT/config\",\"promptPath\":\"$P2D_VISIBLE_SESSION_PROMPT\",\"inboxPath\":\"$WORKSPACE_ROOT/inbox\",\"lastPromptSummary\":\"Tool startup hook registered product-scoped visible session.\",\"latestResponseSummary\":\"Runner wake requested by tool hook.\",\"adapterStatus\":\"hook_bridge_active\",\"productKey\":\"$PRODUCT\"}"
-log "Hook completed for $TOOL."
+log "Hook wrote local launch event for $TOOL: $EVENT_PATH"
 HOOK
   chmod +x "$HOOK_SCRIPT"
 

@@ -335,36 +335,27 @@ param([string]`$Tool = "$Runtime")
 function Write-P2DLog { param([string]`$Message) Add-Content -LiteralPath "$hookLog" -Value "[$(Get-Date -Format o)] `$Message" }
 try {
   `$config = Get-Content -LiteralPath "$configPath" -Raw | ConvertFrom-Json
+  `$eventRoot = Join-Path `$config.workspaceRoot "hooks\events"
+  New-Item -ItemType Directory -Force -Path `$eventRoot | Out-Null
+  `$eventPath = Join-Path `$eventRoot ("{0}-{1}.json" -f (Get-Date -Format "yyyyMMdd-HHmmssfff"), `$Tool)
+  [ordered]@{
+    tool = `$Tool
+    runtimeTool = `$config.runtimeTool
+    runtimeType = `$config.runtimeType
+    productKey = `$config.productKey
+    productId = `$config.productId
+    squadKey = `$config.squadKey
+    squadId = `$config.squadId
+    hostKey = `$config.hostKey
+    releaseKey = `$config.releaseKey
+    workspaceRoot = `$config.workspaceRoot
+    promptPath = "$promptPath"
+    source = "tool_startup_hook"
+    createdAt = (Get-Date).ToString("o")
+  } | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath `$eventPath -Encoding UTF8
   `$task = Get-ScheduledTask -TaskName "$taskName" -ErrorAction SilentlyContinue
   if (`$task) { Start-ScheduledTask -TaskName "$taskName" -ErrorAction SilentlyContinue }
-  `$secure = ConvertTo-SecureString `$config.encryptedToken
-  `$token = [System.Net.NetworkCredential]::new("", `$secure).Password
-  `$headers = @{ Authorization = "Bearer `$token"; "X-E-Divin-Actor" = `$config.actor; "Content-Type" = "application/json" }
-  Invoke-RestMethod -Method POST -Uri "`$(`$config.serviceUrl.TrimEnd('/'))/automation/runner-heartbeat" -Headers `$headers -Body (@{
-    squadKey = `$config.squadKey
-    runtimeType = `$config.runtimeType
-    status = "active"
-    message = "Tool capability hook started: `$Tool on `$(`$config.hostKey)"
-    productKey = `$config.productKey
-  } | ConvertTo-Json -Depth 10 -Compress) | Out-Null
-  Invoke-RestMethod -Method POST -Uri "`$(`$config.serviceUrl.TrimEnd('/'))/runtime-sessions" -Headers `$headers -Body (@{
-    sessionKey = "tool:`$(`$config.productKey):`$(`$config.squadKey):`$(`$config.runtimeTool):`$(`$config.hostKey)"
-    displayName = "`$(`$config.runtimeTool) visible session - `$(`$config.productKey) / `$(`$config.squadKey)"
-    agentKey = "local-squad-automation-runner-agent"
-    squadKey = `$config.squadKey
-    runtimeType = `$config.runtimeType
-    hostKey = `$config.hostKey
-    sessionStatus = "active"
-    sessionRef = "`$Tool startup hook"
-    memoryPath = "`$(`$config.workspaceRoot)\config"
-    promptPath = "$promptPath"
-    inboxPath = "`$(`$config.workspaceRoot)\inbox"
-    lastPromptSummary = "Tool startup hook registered product-scoped visible session."
-    latestResponseSummary = "Runner wake requested by tool hook."
-    adapterStatus = "hook_bridge_active"
-    productKey = `$config.productKey
-  } | ConvertTo-Json -Depth 10 -Compress) | Out-Null
-  Write-P2DLog "Hook completed for `$Tool."
+  Write-P2DLog "Hook wrote local launch event for `$Tool: `$eventPath"
 } catch {
   Write-P2DLog "Hook failed for `$Tool: `$(`$_.Exception.Message)"
 }

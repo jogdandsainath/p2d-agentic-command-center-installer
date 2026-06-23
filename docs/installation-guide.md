@@ -53,7 +53,7 @@ What it includes:
 - Startup hook command for Codex, Claude, GitHub Copilot, Cursor, or service runners.
 - Visible-session prompt path.
 
-Use the startup hook from the profile when the AI tool supports hooks, startup tasks, rules, MCP configuration, or agent launch commands. The hook wakes the runner, sends a heartbeat, and registers a visible session for the selected product and squad.
+Use the startup hook from the profile when the AI tool supports hooks, startup tasks, rules, MCP configuration, or agent launch commands. The hook writes a local tool-launch event and wakes the squad runner. The squad runner then sends the heartbeat, registers the visible session, and writes the local prompt packet for the selected product and squad.
 
 Command Center remains the source of truth. Local files are the machine copy of the product's approved capability profile.
 
