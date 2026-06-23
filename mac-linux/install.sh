@@ -518,7 +518,7 @@ svc_post() {
     "${SERVICE_URL%/}$path" >/dev/null 2>>"$LOG_FILE" || true
 }
 
-EVENT_PATH="$EVENT_ROOT/$(date '+%Y%m%d-%H%M%S%3N')-$TOOL.json"
+EVENT_PATH="$EVENT_ROOT/$(date '+%Y%m%d-%H%M%S')-$$-$TOOL.json"
 cat > "$EVENT_PATH" <<JSON
 {"tool":"$TOOL","runtimeTool":"$RUNTIME","runtimeType":"$RUNTIME","productKey":"$PRODUCT","squadKey":"$SQUAD","hostKey":"$HOST","workspaceRoot":"$WORKSPACE_ROOT","promptPath":"$P2D_VISIBLE_SESSION_PROMPT","source":"tool_startup_hook","createdAt":"$(date -u '+%Y-%m-%dT%H:%M:%SZ')"}
 JSON
