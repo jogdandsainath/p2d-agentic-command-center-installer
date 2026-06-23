@@ -55,7 +55,8 @@ param(
   [string]$Secret = "",
   [string]$Actor = "",
   [string]$HostKey = "",
-  [switch]$NoDaemon
+  [switch]$NoDaemon,
+  [switch]$NoHooks
 )
 
 $ErrorActionPreference = "Stop"
@@ -300,6 +301,119 @@ if (-not $NoDaemon) {
 }
 
 # ── Step 5: Publish onboarding heartbeat ─────────────────────────────────────
+if (-not $NoHooks) {
+  info "Step 5: Installing AI tool capability profile ..."
+  $hookRoot = Join-Path $workspaceRoot "hooks"
+  New-Item -ItemType Directory -Force -Path $hookRoot | Out-Null
+  $hookScript = Join-Path $hookRoot "p2d-tool-start.ps1"
+  $promptPath = Join-Path $hookRoot "visible-session-startup-prompt.md"
+  $profilePath = Join-Path $hookRoot "tool-capability-profile.json"
+  $hookLog = Join-Path $workspaceRoot "logs\tool-hook.log"
+  $taskName = "Pur2Divin-Runner-$ProductKey-$Squad-$Runtime"
+
+  @"
+# Pur2Divin visible-session startup prompt
+
+Product: $ProductKey
+Squad: $Squad
+Runtime: $Runtime
+Host: $HostKey
+
+Use this tool session as a visible, product-scoped agent workspace.
+
+Operating contract:
+- Command Center is the source of truth.
+- Use Swagger/OpenAPI from $ServiceUrl/swagger and $ServiceUrl/openapi.json.
+- Preserve product, squad, command, run, and correlation IDs.
+- Send evidence, blockers, prompt changes, reviews, and handoffs back through Command Center.
+- Do not bypass product governance, prompt review, approval, release, or repo gates.
+"@ | Set-Content -LiteralPath $promptPath -Encoding UTF8
+
+  @"
+param([string]`$Tool = "$Runtime")
+`$ErrorActionPreference = "SilentlyContinue"
+function Write-P2DLog { param([string]`$Message) Add-Content -LiteralPath "$hookLog" -Value "[$(Get-Date -Format o)] `$Message" }
+try {
+  `$config = Get-Content -LiteralPath "$configPath" -Raw | ConvertFrom-Json
+  `$task = Get-ScheduledTask -TaskName "$taskName" -ErrorAction SilentlyContinue
+  if (`$task) { Start-ScheduledTask -TaskName "$taskName" -ErrorAction SilentlyContinue }
+  `$secure = ConvertTo-SecureString `$config.encryptedToken
+  `$token = [System.Net.NetworkCredential]::new("", `$secure).Password
+  `$headers = @{ Authorization = "Bearer `$token"; "X-E-Divin-Actor" = `$config.actor; "Content-Type" = "application/json" }
+  Invoke-RestMethod -Method POST -Uri "`$(`$config.serviceUrl.TrimEnd('/'))/automation/runner-heartbeat" -Headers `$headers -Body (@{
+    squadKey = `$config.squadKey
+    runtimeType = `$config.runtimeType
+    status = "active"
+    message = "Tool capability hook started: `$Tool on `$(`$config.hostKey)"
+    productKey = `$config.productKey
+  } | ConvertTo-Json -Depth 10 -Compress) | Out-Null
+  Invoke-RestMethod -Method POST -Uri "`$(`$config.serviceUrl.TrimEnd('/'))/runtime-sessions" -Headers `$headers -Body (@{
+    sessionKey = "tool:`$(`$config.productKey):`$(`$config.squadKey):`$(`$config.runtimeTool):`$(`$config.hostKey)"
+    displayName = "`$(`$config.runtimeTool) visible session - `$(`$config.productKey) / `$(`$config.squadKey)"
+    agentKey = "local-squad-automation-runner-agent"
+    squadKey = `$config.squadKey
+    runtimeType = `$config.runtimeType
+    hostKey = `$config.hostKey
+    sessionStatus = "active"
+    sessionRef = "`$Tool startup hook"
+    memoryPath = "`$(`$config.workspaceRoot)\config"
+    promptPath = "$promptPath"
+    inboxPath = "`$(`$config.workspaceRoot)\inbox"
+    lastPromptSummary = "Tool startup hook registered product-scoped visible session."
+    latestResponseSummary = "Runner wake requested by tool hook."
+    adapterStatus = "hook_bridge_active"
+    productKey = `$config.productKey
+  } | ConvertTo-Json -Depth 10 -Compress) | Out-Null
+  Write-P2DLog "Hook completed for `$Tool."
+} catch {
+  Write-P2DLog "Hook failed for `$Tool: `$(`$_.Exception.Message)"
+}
+"@ | Set-Content -LiteralPath $hookScript -Encoding UTF8
+
+  $hookCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$hookScript`" -Tool $Runtime"
+  [ordered]@{
+    productKey = $ProductKey
+    productId = $ProductId
+    squadKey = $Squad
+    squadId = $SquadId
+    releaseKey = $ReleaseKey
+    runtime = $Runtime
+    runtimeType = $runtimeType
+    hostKey = $HostKey
+    workspaceRoot = $workspaceRoot
+    commandCenter = $ServiceUrl
+    swaggerUrl = "$ServiceUrl/swagger"
+    openapiUrl = "$ServiceUrl/openapi.json"
+    environmentVariables = $machineVars
+    localFolders = @{
+      config = "$workspaceRoot\config"
+      inbox = "$workspaceRoot\inbox"
+      outbox = "$workspaceRoot\outbox"
+      runtime = "$workspaceRoot\runtime"
+      logs = "$workspaceRoot\logs"
+    }
+    hookScript = $hookScript
+    hookCommand = $hookCommand
+    visibleSessionPrompt = $promptPath
+    tools = @{
+      codex = @{ settingsArea = "Settings > Coding > Hooks"; startupHook = $hookCommand; promptFile = $promptPath }
+      claude = @{ settingsArea = "Developer / Claude Code hooks"; startupHook = $hookCommand; promptFile = $promptPath }
+      copilot = @{ settingsArea = "Agent startup terminal/task"; startupHook = $hookCommand; promptFile = $promptPath }
+      cursor = @{ settingsArea = "Hooks / Rules / MCPs"; startupHook = $hookCommand; promptFile = $promptPath }
+    }
+  } | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $profilePath -Encoding UTF8
+
+  "P2D_TOOL_CAPABILITY_PROFILE=$profilePath`r`nP2D_TOOL_START_HOOK=$hookScript`r`nP2D_VISIBLE_SESSION_PROMPT=$promptPath`r`n" |
+    Set-Content -LiteralPath (Join-Path $hookRoot "tool-env.cmd") -Encoding ASCII
+  "Run this startup hook for ${Runtime}:`r`n$hookCommand`r`n`r`nVisible-session prompt:`r`n$promptPath`r`n" |
+    Set-Content -LiteralPath (Join-Path $hookRoot "tool-hook-readme.txt") -Encoding UTF8
+
+  success "Tool capability profile written: $profilePath"
+  success "Tool startup hook written: $hookScript"
+} else {
+  info "Skipping AI tool hooks and capability profile (--NoHooks)."
+}
+
 Invoke-Svc -Method POST -Path "/automation/runner-heartbeat" -Body @{
   squadKey    = $Squad
   runtimeType = $runtimeType

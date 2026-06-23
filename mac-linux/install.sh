@@ -34,6 +34,7 @@ SERVICE_URL="${P2D_COMMAND_CENTER_URL:-https://www.thep2d.com/p2d-command-center
 SECRET="${P2D_ENROLLMENT_TOKEN:-${SERVICE_SHARED_SECRET:-}}"
 ACTOR="${P2D_ACTOR:-}"
 NO_DAEMON=false
+NO_HOOKS=false
 OS="$(uname -s)"   # Darwin | Linux
 ARCH="$(uname -m)" # x86_64 | arm64
 
@@ -57,6 +58,7 @@ while [[ $# -gt 0 ]]; do
     --url)      SERVICE_URL="$2"; shift 2 ;;
     --actor)    ACTOR="$2";       shift 2 ;;
     --no-daemon) NO_DAEMON=true;  shift ;;
+    --no-hooks) NO_HOOKS=true;    shift ;;
     *) warn "Unknown flag: $1"; shift ;;
   esac
 done
@@ -392,6 +394,145 @@ else
 fi
 
 # ── Step 6: Publish onboarding heartbeat ────────────────────────────────────
+if [[ "$NO_HOOKS" == "false" ]]; then
+  info "Step 6: Installing AI tool capability profile ..."
+  HOOK_ROOT="$WORKSPACE_ROOT/hooks"
+  mkdir -p "$HOOK_ROOT"
+  HOOK_SCRIPT="$HOOK_ROOT/p2d-tool-start.sh"
+  PROMPT_PATH="$HOOK_ROOT/visible-session-startup-prompt.md"
+  PROFILE_PATH="$HOOK_ROOT/tool-capability-profile.json"
+  HOOK_ENV="$HOOK_ROOT/tool-env"
+  HOOK_LOG="$WORKSPACE_ROOT/logs/tool-hook.log"
+
+  cat > "$PROMPT_PATH" <<EOF
+# Pur2Divin visible-session startup prompt
+
+Product: $PRODUCT_KEY
+Squad: $SQUAD_KEY
+Runtime: $RUNTIME_TYPE
+Host: $HOST_KEY
+
+Use this tool session as a visible, product-scoped agent workspace.
+
+Operating contract:
+- Command Center is the source of truth.
+- Use Swagger/OpenAPI from $SERVICE_URL/swagger and $SERVICE_URL/openapi.json.
+- Preserve product, squad, command, run, and correlation IDs.
+- Send evidence, blockers, prompt changes, reviews, and handoffs back through Command Center.
+- Do not bypass product governance, prompt review, approval, release, or repo gates.
+EOF
+
+  cat > "$HOOK_ENV" <<EOF
+export P2D_TOOL_CAPABILITY_PROFILE="$PROFILE_PATH"
+export P2D_TOOL_START_HOOK="$HOOK_SCRIPT"
+export P2D_VISIBLE_SESSION_PROMPT="$PROMPT_PATH"
+export P2D_COMMAND_CENTER_URL="$SERVICE_URL"
+export P2D_PRODUCT_KEY="$PRODUCT_KEY"
+export P2D_PRODUCT_ID="$PRODUCT_ID"
+export P2D_SQUAD_KEY="$SQUAD_KEY"
+export P2D_SQUAD_ID="$SQUAD_ID"
+export P2D_RELEASE_KEY="$RELEASE_KEY"
+export P2D_RUNTIME="$RUNTIME_TYPE"
+export P2D_WORKSPACE_ROOT="$WORKSPACE_ROOT"
+EOF
+  chmod 600 "$HOOK_ENV"
+
+  cat > "$HOOK_SCRIPT" <<'HOOK'
+#!/usr/bin/env bash
+set -uo pipefail
+TOOL="${1:-${P2D_RUNTIME:-agent-tool}}"
+WORKSPACE_ROOT="${P2D_WORKSPACE_ROOT:-$HOME/.pur2divin}"
+ENV_FILE="$WORKSPACE_ROOT/config/env"
+HOOK_ENV="$WORKSPACE_ROOT/hooks/tool-env"
+LOG_FILE="$WORKSPACE_ROOT/logs/tool-hook.log"
+[[ -f "$ENV_FILE" ]] && source "$ENV_FILE"
+[[ -f "$HOOK_ENV" ]] && source "$HOOK_ENV"
+SERVICE_URL="${P2D_COMMAND_CENTER_URL:-${E_DIVIN_AGENT_SERVICE_URL:-}}"
+SECRET="${P2D_ENROLLMENT_TOKEN:-${SERVICE_SHARED_SECRET:-}}"
+ACTOR="${P2D_ACTOR:-${E_DIVIN_ACTOR:-founder}}"
+SQUAD="${P2D_SQUAD_KEY:-${E_DIVIN_SQUAD_KEY:-}}"
+RUNTIME="${P2D_RUNTIME:-${E_DIVIN_RUNTIME_TYPE:-codex}}"
+PRODUCT="${P2D_PRODUCT_KEY:-${E_DIVIN_PRODUCT_KEY:-}}"
+HOST="${HOSTNAME:-$(hostname -s 2>/dev/null || hostname)}"
+
+log() { printf '[%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" >> "$LOG_FILE"; }
+svc_post() {
+  local path="$1" body="$2"
+  [[ -z "$SERVICE_URL" || -z "$SECRET" ]] && return 0
+  curl -sf -X POST \
+    -H "Authorization: Bearer $SECRET" \
+    -H "X-E-Divin-Actor: $ACTOR" \
+    -H "Content-Type: application/json" \
+    -d "$body" \
+    "${SERVICE_URL%/}$path" >/dev/null 2>>"$LOG_FILE" || true
+}
+
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl --user start "pur2divin-runner-${PRODUCT}-${SQUAD}.service" >/dev/null 2>&1 || true
+fi
+if command -v launchctl >/dev/null 2>&1; then
+  launchctl kickstart "gui/$(id -u)/com.pur2divin.runner-${PRODUCT}-${SQUAD}" >/dev/null 2>&1 || true
+fi
+
+svc_post "/automation/runner-heartbeat" "{\"squadKey\":\"$SQUAD\",\"runtimeType\":\"$RUNTIME\",\"status\":\"active\",\"message\":\"Tool capability hook started: $TOOL on $HOST\",\"productKey\":\"$PRODUCT\"}"
+svc_post "/runtime-sessions" "{\"sessionKey\":\"tool:$PRODUCT:$SQUAD:$RUNTIME:$HOST\",\"displayName\":\"$RUNTIME visible session - $PRODUCT / $SQUAD\",\"agentKey\":\"local-squad-automation-runner-agent\",\"squadKey\":\"$SQUAD\",\"runtimeType\":\"$RUNTIME\",\"hostKey\":\"$HOST\",\"sessionStatus\":\"active\",\"sessionRef\":\"$TOOL startup hook\",\"memoryPath\":\"$WORKSPACE_ROOT/config\",\"promptPath\":\"$P2D_VISIBLE_SESSION_PROMPT\",\"inboxPath\":\"$WORKSPACE_ROOT/inbox\",\"lastPromptSummary\":\"Tool startup hook registered product-scoped visible session.\",\"latestResponseSummary\":\"Runner wake requested by tool hook.\",\"adapterStatus\":\"hook_bridge_active\",\"productKey\":\"$PRODUCT\"}"
+log "Hook completed for $TOOL."
+HOOK
+  chmod +x "$HOOK_SCRIPT"
+
+  cat > "$PROFILE_PATH" <<EOF
+{
+  "productKey": "$PRODUCT_KEY",
+  "productId": "$PRODUCT_ID",
+  "squadKey": "$SQUAD_KEY",
+  "squadId": "$SQUAD_ID",
+  "releaseKey": "$RELEASE_KEY",
+  "runtime": "$RUNTIME_TYPE",
+  "runtimeType": "$RUNTIME_API",
+  "hostKey": "$HOST_KEY",
+  "workspaceRoot": "$WORKSPACE_ROOT",
+  "commandCenter": "$SERVICE_URL",
+  "swaggerUrl": "$SERVICE_URL/swagger",
+  "openapiUrl": "$SERVICE_URL/openapi.json",
+  "environmentFile": "$HOOK_ENV",
+  "hookScript": "$HOOK_SCRIPT",
+  "visibleSessionPrompt": "$PROMPT_PATH",
+  "localFolders": {
+    "config": "$WORKSPACE_ROOT/config",
+    "inbox": "$WORKSPACE_ROOT/inbox",
+    "outbox": "$WORKSPACE_ROOT/outbox",
+    "runtime": "$WORKSPACE_ROOT/runtime",
+    "logs": "$WORKSPACE_ROOT/logs"
+  },
+  "tools": {
+    "codex": { "settingsArea": "Settings > Coding > Hooks", "startupHook": "$HOOK_SCRIPT codex", "promptFile": "$PROMPT_PATH" },
+    "claude": { "settingsArea": "Developer / Claude Code hooks", "startupHook": "$HOOK_SCRIPT claude", "promptFile": "$PROMPT_PATH" },
+    "copilot": { "settingsArea": "Agent startup terminal/task", "startupHook": "$HOOK_SCRIPT copilot", "promptFile": "$PROMPT_PATH" },
+    "cursor": { "settingsArea": "Hooks / Rules / MCPs", "startupHook": "$HOOK_SCRIPT cursor", "promptFile": "$PROMPT_PATH" }
+  }
+}
+EOF
+
+  cat > "$HOOK_ROOT/tool-hook-readme.md" <<EOF
+# Pur2Divin Agent Tool Capability Hook
+
+Run this command when $RUNTIME_TYPE starts:
+
+\`\`\`bash
+$HOOK_SCRIPT $RUNTIME_TYPE
+\`\`\`
+
+Visible-session prompt:
+
+$PROMPT_PATH
+EOF
+
+  success "Tool capability profile written: $PROFILE_PATH"
+  success "Tool startup hook written: $HOOK_SCRIPT"
+else
+  info "Skipping AI tool hooks and capability profile (--no-hooks)."
+fi
+
 svc_post "/automation/runner-heartbeat" \
   "{\"squadKey\":\"$SQUAD_KEY\",\"runtimeType\":\"$RUNTIME_API\",\"status\":\"active\",\"message\":\"Machine onboarded: $HOST_KEY ($OS $RUNTIME_TYPE)\",\"productKey\":\"$PRODUCT_KEY\"}" >/dev/null || true
 

@@ -36,6 +36,7 @@ const squadId = await value("squad-id", "Squad ID", process.env.P2D_SQUAD_ID);
 const release = await value("release", "Release or wave key", process.env.P2D_RELEASE_KEY || "current");
 const runtime = (await value("runtime", "Runtime (codex, claude, copilot, cursor, service)", process.env.P2D_RUNTIME)).toLowerCase();
 const machine = args.get("machine") || process.env.P2D_MACHINE_KEY || "";
+const noHooks = args.get("no-hooks") === "true" || process.env.P2D_NO_HOOKS === "true";
 const actor = await value("actor", "Organization user ID", process.env.P2D_ACTOR);
 const serviceUrl = await value(
   "url",
@@ -89,7 +90,8 @@ const scriptArgs = isWindows
       serviceUrl,
       "-Secret",
       token,
-      ...(machine ? ["-HostKey", machine] : [])
+      ...(machine ? ["-HostKey", machine] : []),
+      ...(noHooks ? ["-NoHooks"] : [])
     ]
   : [
       script,
@@ -109,7 +111,8 @@ const scriptArgs = isWindows
       actor,
       "--url",
       serviceUrl,
-      ...(machine ? ["--host", machine] : [])
+      ...(machine ? ["--host", machine] : []),
+      ...(noHooks ? ["--no-hooks"] : [])
     ];
 
 const result = spawnSync(command, scriptArgs, {

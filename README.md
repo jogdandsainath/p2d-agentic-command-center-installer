@@ -27,6 +27,13 @@ The installer is platform-neutral. E-Divin is an existing product workspace, not
    - macOS launchd agent
    - Linux systemd user service
 8. Publishes a health signal to Command Center.
+9. Writes a local AI tool capability profile, startup hook, and visible-session prompt:
+   - `hooks/tool-capability-profile.json`
+   - `hooks/p2d-tool-start.ps1` or `hooks/p2d-tool-start.sh`
+   - `hooks/visible-session-startup-prompt.md`
+   - `hooks/tool-env.cmd` or `hooks/tool-env`
+
+The capability profile is the local copy of the Command Center-approved policy for the selected product, squad, runtime tool, hooks, prompts, MCP/API awareness, and visible-session registration. Use `--no-hooks` only when an enterprise desktop policy blocks tool startup hooks.
 
 ## Before Installation
 
@@ -91,6 +98,12 @@ curl -fsSL \
       --runtime 'claude'
 ```
 
+To install without writing AI tool hook files:
+
+```bash
+npx github:jogdandsainath/p2d-agentic-command-center-installer --no-hooks
+```
+
 ## Runtime Values
 
 Use one of:
@@ -125,6 +138,7 @@ Pur2Divin/
           <agentic-tool>/
             <machine-key>/
               config/
+              hooks/
               inbox/
               outbox/
               runtime/

@@ -40,7 +40,24 @@ After installation, authenticate the selected tool using its own secure login:
 - GitHub Copilot: run `gh auth login`, then verify Copilot access.
 - Cursor: sign in to Cursor and enable the `cursor` shell command.
 
-## 4. Verify Command Center Registration
+## 4. AI Tool Capability Profile
+
+Each installation writes a product-scoped capability profile under the machine workspace `hooks` folder. This profile explains how the selected tool should connect to Command Center.
+
+What it includes:
+
+- Product, release, squad, runtime, host, and workspace identity.
+- Command Center API, Swagger, and OpenAPI links.
+- Required `P2D_*` environment variable names.
+- Local inbox, outbox, runtime, config, log, and hook folders.
+- Startup hook command for Codex, Claude, GitHub Copilot, Cursor, or service runners.
+- Visible-session prompt path.
+
+Use the startup hook from the profile when the AI tool supports hooks, startup tasks, rules, MCP configuration, or agent launch commands. The hook wakes the runner, sends a heartbeat, and registers a visible session for the selected product and squad.
+
+Command Center remains the source of truth. Local files are the machine copy of the product's approved capability profile.
+
+## 5. Verify Command Center Registration
 
 Open the same product workspace used during installation:
 
@@ -49,7 +66,7 @@ Open the same product workspace used during installation:
 3. **Runtime Sessions** must not show resources from another product.
 4. Runner health must change from starting to idle or active.
 
-## 5. Run A Low-Risk Test
+## 6. Run A Low-Risk Test
 
 Send a low-risk command to the selected squad. Verify:
 
@@ -59,15 +76,16 @@ Send a low-risk command to the selected squad. Verify:
 4. The visible agent session receives the governed prompt.
 5. Evidence returns to the same product workspace.
 
-## 6. Security Rules
+## 7. Security Rules
 
 - Never paste enrollment tokens into GitHub issues, prompts, or chat.
 - Use a different enrollment token for each onboarding window.
 - Revoke the token after installation.
 - Retire or transfer the machine from Command Center before reassigning it.
 - Never point one runner at multiple products.
+- Do not edit hook, prompt, or MCP policy locally to bypass Command Center.
 
-## 7. Ownership Transfer
+## 8. Ownership Transfer
 
 To move a machine or agent to another squad:
 
