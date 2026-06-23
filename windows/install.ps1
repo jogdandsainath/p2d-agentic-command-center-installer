@@ -310,6 +310,8 @@ if (-not $NoHooks) {
   $profilePath = Join-Path $hookRoot "tool-capability-profile.json"
   $hookLog = Join-Path $workspaceRoot "logs\tool-hook.log"
   $taskName = "Pur2Divin-Runner-$ProductKey-$Squad-$Runtime"
+  $launcherRoot = Join-Path $workspaceRoot "launchers"
+  New-Item -ItemType Directory -Force -Path $launcherRoot | Out-Null
 
   @"
 # Pur2Divin visible-session startup prompt
@@ -362,6 +364,37 @@ try {
 "@ | Set-Content -LiteralPath $hookScript -Encoding UTF8
 
   $hookCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$hookScript`" -Tool $Runtime"
+  $launcherPath = Join-Path $launcherRoot "start-$Runtime.ps1"
+  $launcherCmdPath = Join-Path $launcherRoot "start-$Runtime.cmd"
+  @"
+param([string[]]`$ToolArgs = @())
+`$ErrorActionPreference = "Continue"
+& "$hookScript" -Tool "$Runtime"
+switch ("$Runtime") {
+  "codex" {
+    if (Get-Command codex -ErrorAction SilentlyContinue) { & codex @ToolArgs }
+    else { Write-Host "Codex CLI not found. Run: npm install -g @openai/codex" -ForegroundColor Yellow }
+  }
+  "claude" {
+    if (Get-Command claude -ErrorAction SilentlyContinue) { & claude @ToolArgs }
+    else { Write-Host "Claude Code CLI not found. Run: npm install -g @anthropic-ai/claude-code" -ForegroundColor Yellow }
+  }
+  "cursor" {
+    if (Get-Command cursor -ErrorAction SilentlyContinue) { & cursor @ToolArgs }
+    else { Write-Host "Cursor launcher not found. Enable the Cursor command-line launcher." -ForegroundColor Yellow }
+  }
+  "copilot" {
+    if (Get-Command gh -ErrorAction SilentlyContinue) {
+      if (`$ToolArgs.Count -gt 0) { & gh copilot @ToolArgs } else { & gh copilot --help }
+    } else { Write-Host "GitHub CLI not found. Install gh and authenticate with gh auth login." -ForegroundColor Yellow }
+  }
+  default {
+    Write-Host "Pur2Divin service runner started. No interactive tool command is required."
+  }
+}
+"@ | Set-Content -LiteralPath $launcherPath -Encoding UTF8
+  "@echo off`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$launcherPath`" %*`r`n" |
+    Set-Content -LiteralPath $launcherCmdPath -Encoding ASCII
   [ordered]@{
     productKey = $ProductKey
     productId = $ProductId
@@ -382,25 +415,29 @@ try {
       outbox = "$workspaceRoot\outbox"
       runtime = "$workspaceRoot\runtime"
       logs = "$workspaceRoot\logs"
+      launchers = $launcherRoot
     }
     hookScript = $hookScript
     hookCommand = $hookCommand
+    launcherScript = $launcherPath
+    launcherCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$launcherPath`""
     visibleSessionPrompt = $promptPath
     tools = @{
-      codex = @{ settingsArea = "Settings > Coding > Hooks"; startupHook = $hookCommand; promptFile = $promptPath }
-      claude = @{ settingsArea = "Developer / Claude Code hooks"; startupHook = $hookCommand; promptFile = $promptPath }
-      copilot = @{ settingsArea = "Agent startup terminal/task"; startupHook = $hookCommand; promptFile = $promptPath }
-      cursor = @{ settingsArea = "Hooks / Rules / MCPs"; startupHook = $hookCommand; promptFile = $promptPath }
+      codex = @{ settingsArea = "Settings > Coding > Hooks"; startupHook = $hookCommand; launcher = $launcherPath; promptFile = $promptPath }
+      claude = @{ settingsArea = "Developer / Claude Code hooks"; startupHook = $hookCommand; launcher = $launcherPath; promptFile = $promptPath }
+      copilot = @{ settingsArea = "Agent startup terminal/task"; startupHook = $hookCommand; launcher = $launcherPath; promptFile = $promptPath }
+      cursor = @{ settingsArea = "Hooks / Rules / MCPs"; startupHook = $hookCommand; launcher = $launcherPath; promptFile = $promptPath }
     }
   } | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $profilePath -Encoding UTF8
 
-  "P2D_TOOL_CAPABILITY_PROFILE=$profilePath`r`nP2D_TOOL_START_HOOK=$hookScript`r`nP2D_VISIBLE_SESSION_PROMPT=$promptPath`r`n" |
+  "P2D_TOOL_CAPABILITY_PROFILE=$profilePath`r`nP2D_TOOL_START_HOOK=$hookScript`r`nP2D_TOOL_LAUNCHER=$launcherPath`r`nP2D_VISIBLE_SESSION_PROMPT=$promptPath`r`n" |
     Set-Content -LiteralPath (Join-Path $hookRoot "tool-env.cmd") -Encoding ASCII
-  "Run this startup hook for ${Runtime}:`r`n$hookCommand`r`n`r`nVisible-session prompt:`r`n$promptPath`r`n" |
+  "Preferred launcher for ${Runtime}:`r`n$launcherPath`r`n`r`nStartup hook only:`r`n$hookCommand`r`n`r`nVisible-session prompt:`r`n$promptPath`r`n" |
     Set-Content -LiteralPath (Join-Path $hookRoot "tool-hook-readme.txt") -Encoding UTF8
 
   success "Tool capability profile written: $profilePath"
   success "Tool startup hook written: $hookScript"
+  success "Tool launcher written: $launcherPath"
 } else {
   info "Skipping AI tool hooks and capability profile (--NoHooks)."
 }

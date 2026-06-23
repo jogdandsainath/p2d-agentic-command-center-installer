@@ -450,6 +450,8 @@ if [[ "$NO_HOOKS" == "false" ]]; then
   PROFILE_PATH="$HOOK_ROOT/tool-capability-profile.json"
   HOOK_ENV="$HOOK_ROOT/tool-env"
   HOOK_LOG="$WORKSPACE_ROOT/logs/tool-hook.log"
+  LAUNCHER_ROOT="$WORKSPACE_ROOT/launchers"
+  mkdir -p "$LAUNCHER_ROOT"
 
   cat > "$PROMPT_PATH" <<EOF
 # Pur2Divin visible-session startup prompt
@@ -531,6 +533,34 @@ fi
 log "Hook wrote local launch event for $TOOL: $EVENT_PATH"
 HOOK
   chmod +x "$HOOK_SCRIPT"
+  LAUNCHER_PATH="$LAUNCHER_ROOT/start-$RUNTIME_TYPE.sh"
+  cat > "$LAUNCHER_PATH" <<EOF
+#!/usr/bin/env bash
+set -uo pipefail
+"$HOOK_SCRIPT" "$RUNTIME_TYPE"
+case "$RUNTIME_TYPE" in
+  codex)
+    if command -v codex >/dev/null 2>&1; then codex "\$@"; else echo "Codex CLI not found. Run: npm install -g @openai/codex"; fi
+    ;;
+  claude)
+    if command -v claude >/dev/null 2>&1; then claude "\$@"; else echo "Claude Code CLI not found. Run: npm install -g @anthropic-ai/claude-code"; fi
+    ;;
+  cursor)
+    if command -v cursor >/dev/null 2>&1; then cursor "\$@"; else echo "Cursor launcher not found. Enable the Cursor command-line launcher."; fi
+    ;;
+  copilot)
+    if command -v gh >/dev/null 2>&1; then
+      if [[ \$# -gt 0 ]]; then gh copilot "\$@"; else gh copilot --help; fi
+    else
+      echo "GitHub CLI not found. Install gh and authenticate with gh auth login."
+    fi
+    ;;
+  service)
+    echo "Pur2Divin service runner started. No interactive tool command is required."
+    ;;
+esac
+EOF
+  chmod +x "$LAUNCHER_PATH"
 
   cat > "$PROFILE_PATH" <<EOF
 {
@@ -548,19 +578,21 @@ HOOK
   "openapiUrl": "$SERVICE_URL/openapi.json",
   "environmentFile": "$HOOK_ENV",
   "hookScript": "$HOOK_SCRIPT",
+  "launcherScript": "$LAUNCHER_PATH",
   "visibleSessionPrompt": "$PROMPT_PATH",
   "localFolders": {
     "config": "$WORKSPACE_ROOT/config",
     "inbox": "$WORKSPACE_ROOT/inbox",
     "outbox": "$WORKSPACE_ROOT/outbox",
     "runtime": "$WORKSPACE_ROOT/runtime",
-    "logs": "$WORKSPACE_ROOT/logs"
+    "logs": "$WORKSPACE_ROOT/logs",
+    "launchers": "$LAUNCHER_ROOT"
   },
   "tools": {
-    "codex": { "settingsArea": "Settings > Coding > Hooks", "startupHook": "$HOOK_SCRIPT codex", "promptFile": "$PROMPT_PATH" },
-    "claude": { "settingsArea": "Developer / Claude Code hooks", "startupHook": "$HOOK_SCRIPT claude", "promptFile": "$PROMPT_PATH" },
-    "copilot": { "settingsArea": "Agent startup terminal/task", "startupHook": "$HOOK_SCRIPT copilot", "promptFile": "$PROMPT_PATH" },
-    "cursor": { "settingsArea": "Hooks / Rules / MCPs", "startupHook": "$HOOK_SCRIPT cursor", "promptFile": "$PROMPT_PATH" }
+    "codex": { "settingsArea": "Settings > Coding > Hooks", "startupHook": "$HOOK_SCRIPT codex", "launcher": "$LAUNCHER_PATH", "promptFile": "$PROMPT_PATH" },
+    "claude": { "settingsArea": "Developer / Claude Code hooks", "startupHook": "$HOOK_SCRIPT claude", "launcher": "$LAUNCHER_PATH", "promptFile": "$PROMPT_PATH" },
+    "copilot": { "settingsArea": "Agent startup terminal/task", "startupHook": "$HOOK_SCRIPT copilot", "launcher": "$LAUNCHER_PATH", "promptFile": "$PROMPT_PATH" },
+    "cursor": { "settingsArea": "Hooks / Rules / MCPs", "startupHook": "$HOOK_SCRIPT cursor", "launcher": "$LAUNCHER_PATH", "promptFile": "$PROMPT_PATH" }
   }
 }
 EOF
@@ -574,6 +606,12 @@ Run this command when $RUNTIME_TYPE starts:
 $HOOK_SCRIPT $RUNTIME_TYPE
 \`\`\`
 
+Preferred launcher:
+
+\`\`\`bash
+$LAUNCHER_PATH
+\`\`\`
+
 Visible-session prompt:
 
 $PROMPT_PATH
@@ -581,6 +619,7 @@ EOF
 
   success "Tool capability profile written: $PROFILE_PATH"
   success "Tool startup hook written: $HOOK_SCRIPT"
+  success "Tool launcher written: $LAUNCHER_PATH"
 else
   info "Skipping AI tool hooks and capability profile (--no-hooks)."
 fi
