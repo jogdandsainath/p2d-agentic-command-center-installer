@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# E-Divin Machine Onboarding Script — Cross-Platform (macOS / Linux)
+# Pur2Divin Machine Onboarding - macOS / Linux
 # =============================================================================
 # Usage:
 #   curl -fsSL https://e-divin-agent-communication-service.vercel.app/install.sh | bash
@@ -8,14 +8,14 @@
 #   bash scripts/onboard-machine.sh --squad ui-squad --runtime claude --product e-divin-eos
 #
 # Required env vars (or passed as flags):
-#   E_DIVIN_AGENT_SERVICE_URL  — service base URL
+#   P2D_COMMAND_CENTER_URL     — Command Center base URL
 #   SERVICE_SHARED_SECRET      — bearer token
-#   E_DIVIN_ACTOR              — your GitHub username
+#   P2D_ACTOR                  — organization user ID
 #
 # Flags:
 #   --squad    SQUAD_KEY      squad to join (required)
-#   --runtime  RUNTIME_TYPE   codex | claude | copilot | service (required)
-#   --product  PRODUCT_KEY    product key (default: e-divin-eos)
+#   --runtime  RUNTIME_TYPE   codex | claude | copilot | cursor | service
+#   --product  PRODUCT_KEY    product workspace key (required)
 #   --host     HOST_KEY       machine host key (default: hostname)
 #   --url      SERVICE_URL    override service URL
 #   --no-daemon               skip installing background runner daemon
@@ -25,21 +25,25 @@ set -euo pipefail
 # ── Defaults ──────────────────────────────────────────────────────────────────
 SQUAD_KEY=""
 RUNTIME_TYPE=""
-PRODUCT_KEY="e-divin-eos"
+PRODUCT_KEY=""
+PRODUCT_ID=""
+SQUAD_ID=""
+RELEASE_KEY="current"
 HOST_KEY="$(hostname -s 2>/dev/null || hostname)"
-SERVICE_URL="${E_DIVIN_AGENT_SERVICE_URL:-https://e-divin-agent-communication-service.vercel.app}"
-SECRET="${SERVICE_SHARED_SECRET:-}"
-ACTOR="${E_DIVIN_ACTOR:-}"
+SERVICE_URL="${P2D_COMMAND_CENTER_URL:-https://www.thep2d.com/p2d-command-center}"
+SECRET="${P2D_ENROLLMENT_TOKEN:-${SERVICE_SHARED_SECRET:-}}"
+ACTOR="${P2D_ACTOR:-}"
 NO_DAEMON=false
+NO_HOOKS=false
 OS="$(uname -s)"   # Darwin | Linux
 ARCH="$(uname -m)" # x86_64 | arm64
 
 # ── Colours ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
-info()    { echo -e "${CYAN}[e-divin]${NC} $*"; }
-success() { echo -e "${GREEN}[e-divin]${NC} $*"; }
-warn()    { echo -e "${YELLOW}[e-divin]${NC} $*"; }
-error()   { echo -e "${RED}[e-divin]${NC} $*" >&2; exit 1; }
+info()    { echo -e "${CYAN}[p2d]${NC} $*"; }
+success() { echo -e "${GREEN}[p2d]${NC} $*"; }
+warn()    { echo -e "${YELLOW}[p2d]${NC} $*"; }
+error()   { echo -e "${RED}[p2d]${NC} $*" >&2; exit 1; }
 
 # ── Parse args ────────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -47,29 +51,51 @@ while [[ $# -gt 0 ]]; do
     --squad)    SQUAD_KEY="$2";   shift 2 ;;
     --runtime)  RUNTIME_TYPE="$2"; shift 2 ;;
     --product)  PRODUCT_KEY="$2"; shift 2 ;;
+    --product-id) PRODUCT_ID="$2"; shift 2 ;;
+    --squad-id) SQUAD_ID="$2"; shift 2 ;;
+    --release) RELEASE_KEY="$2"; shift 2 ;;
     --host)     HOST_KEY="$2";    shift 2 ;;
     --url)      SERVICE_URL="$2"; shift 2 ;;
     --actor)    ACTOR="$2";       shift 2 ;;
     --no-daemon) NO_DAEMON=true;  shift ;;
+    --no-hooks) NO_HOOKS=true;    shift ;;
     *) warn "Unknown flag: $1"; shift ;;
   esac
 done
 
-[[ -z "$SQUAD_KEY" ]]   && error "--squad is required (e.g. --squad ui-squad)"
-[[ -z "$RUNTIME_TYPE" ]] && error "--runtime is required: codex | claude | copilot | service"
-[[ -z "$SECRET" ]]       && error "Set SERVICE_SHARED_SECRET env var before running."
-[[ -z "$ACTOR" ]]        && ACTOR="$(git config user.name 2>/dev/null || echo 'founder')"
+[[ -z "$PRODUCT_KEY" ]] && read -r -p "Product workspace key: " PRODUCT_KEY
+[[ -z "$PRODUCT_ID" ]] && read -r -p "Product ID: " PRODUCT_ID
+[[ -z "$SQUAD_KEY" ]] && read -r -p "Squad key: " SQUAD_KEY
+[[ -z "$SQUAD_ID" ]] && read -r -p "Squad ID: " SQUAD_ID
+[[ -z "$RUNTIME_TYPE" ]] && read -r -p "AI runtime (codex, claude, copilot, cursor, service): " RUNTIME_TYPE
+[[ -z "$ACTOR" ]] && read -r -p "Organization user ID: " ACTOR
+if [[ -z "$SECRET" ]]; then
+  read -r -s -p "Command Center enrollment token: " SECRET
+  echo ""
+fi
+[[ "$RUNTIME_TYPE" =~ ^(codex|claude|copilot|cursor|service)$ ]] || error "Unsupported runtime: $RUNTIME_TYPE"
+[[ -z "$PRODUCT_KEY" || -z "$PRODUCT_ID" || -z "$SQUAD_KEY" || -z "$SQUAD_ID" || -z "$RELEASE_KEY" || -z "$ACTOR" || -z "$SECRET" ]] && error "Product ID/key, squad ID/key, release, user ID, and enrollment token are required."
 
 SERVICE_URL="${SERVICE_URL%/}"
-INSTALL_DIR="$HOME/.e-divin"
-mkdir -p "$INSTALL_DIR/inbox/$SQUAD_KEY" "$INSTALL_DIR/outbox/$SQUAD_KEY" "$INSTALL_DIR/runtime"
+INSTALL_DIR="$HOME/.pur2divin"
+SAFE_RELEASE="$(printf '%s' "$RELEASE_KEY" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-//;s/-$//' | tr '[:upper:]' '[:lower:]')"
+[[ -z "$SAFE_RELEASE" ]] && SAFE_RELEASE="current"
+WORKSPACE_ROOT="$INSTALL_DIR/workspaces/$PRODUCT_KEY/$SAFE_RELEASE/$SQUAD_KEY/$RUNTIME_TYPE/$HOST_KEY"
+mkdir -p "$WORKSPACE_ROOT/config" "$WORKSPACE_ROOT/inbox" "$WORKSPACE_ROOT/outbox" "$WORKSPACE_ROOT/runtime" "$WORKSPACE_ROOT/logs"
 
-info "E-Divin Machine Onboarding"
+MACHINE_SECRET="$(openssl rand -base64 32 2>/dev/null || (umask 077; dd if=/dev/urandom bs=32 count=1 2>/dev/null | base64))"
+RUNTIME_API="$RUNTIME_TYPE"
+[[ "$RUNTIME_TYPE" == "copilot" ]] && RUNTIME_API="github_action"
+[[ "$RUNTIME_TYPE" == "cursor" ]] && RUNTIME_API="other"
+
+info "Pur2Divin Machine Onboarding"
 info "  OS:      $OS $ARCH"
 info "  Squad:   $SQUAD_KEY"
 info "  Runtime: $RUNTIME_TYPE"
 info "  Product: $PRODUCT_KEY"
+info "  Release: $RELEASE_KEY"
 info "  Host:    $HOST_KEY"
+info "  Folder:  $WORKSPACE_ROOT"
 info "  Service: $SERVICE_URL"
 echo ""
 
@@ -152,9 +178,20 @@ case "$RUNTIME_TYPE" in
   copilot)
     install_node
     install_gh_cli
-    info "Verifying GitHub Copilot extension …"
-    gh extension install github/gh-copilot 2>/dev/null || true
-    success "GitHub Copilot CLI ready."
+    if gh copilot --help >/dev/null 2>&1; then
+      success "GitHub Copilot command is available."
+    else
+      warn "GitHub Copilot CLI command was not detected."
+      warn "Run 'gh auth login' and confirm Copilot access for this account."
+    fi
+    ;;
+  cursor)
+    if command -v cursor &>/dev/null; then
+      success "Cursor command-line launcher detected."
+    else
+      warn "Cursor is not installed or its shell command is unavailable."
+      warn "Install Cursor, then enable its shell command from the Cursor command palette."
+    fi
     ;;
   service)
     install_node
@@ -163,17 +200,28 @@ esac
 
 # ── Step 2: Write env config ──────────────────────────────────────────────────
 info "Step 2: Writing environment configuration …"
-ENV_FILE="$INSTALL_DIR/env"
+ENV_FILE="$WORKSPACE_ROOT/config/env"
 cat > "$ENV_FILE" <<EOF
-# E-Divin environment — sourced by runner daemon
+# Pur2Divin environment sourced by the runner daemon
+export P2D_COMMAND_CENTER_URL="$SERVICE_URL"
+export P2D_ACTOR="$ACTOR"
+export P2D_SQUAD_KEY="$SQUAD_KEY"
+export P2D_RUNTIME="$RUNTIME_TYPE"
+export P2D_PRODUCT_KEY="$PRODUCT_KEY"
+export P2D_PRODUCT_ID="$PRODUCT_ID"
+export P2D_SQUAD_ID="$SQUAD_ID"
+export P2D_RELEASE_KEY="$RELEASE_KEY"
+export P2D_MACHINE_SECRET="$MACHINE_SECRET"
+export P2D_WORKSPACE_ROOT="$WORKSPACE_ROOT"
+export P2D_LOCAL_INBOX_ROOT="$WORKSPACE_ROOT/inbox"
+export P2D_LOCAL_OUTBOX_ROOT="$WORKSPACE_ROOT/outbox"
+export P2D_LOCAL_RUNTIME_ROOT="$WORKSPACE_ROOT/runtime"
+# Legacy aliases keep existing runner contracts compatible.
 export E_DIVIN_AGENT_SERVICE_URL="$SERVICE_URL"
 export E_DIVIN_ACTOR="$ACTOR"
 export E_DIVIN_SQUAD_KEY="$SQUAD_KEY"
 export E_DIVIN_RUNTIME_TYPE="$RUNTIME_TYPE"
 export E_DIVIN_PRODUCT_KEY="$PRODUCT_KEY"
-export E_DIVIN_LOCAL_INBOX_ROOT="$INSTALL_DIR/inbox"
-export E_DIVIN_LOCAL_OUTBOX_ROOT="$INSTALL_DIR/outbox"
-export E_DIVIN_LOCAL_RUNTIME_ROOT="$INSTALL_DIR/runtime"
 # SERVICE_SHARED_SECRET must already be set in your shell profile (do not store here)
 EOF
 success "Env config written to $ENV_FILE"
@@ -181,15 +229,15 @@ success "Env config written to $ENV_FILE"
 # Add to shell profile if not already there
 SHELL_PROFILE="$HOME/.bashrc"
 [[ "$SHELL" == *"zsh"* ]] && SHELL_PROFILE="$HOME/.zshrc"
-if ! grep -q "e-divin/env" "$SHELL_PROFILE" 2>/dev/null; then
+if ! grep -q ".pur2divin/env" "$SHELL_PROFILE" 2>/dev/null; then
   echo "" >> "$SHELL_PROFILE"
-  echo "# E-Divin agent runtime" >> "$SHELL_PROFILE"
+  echo "# Pur2Divin agent runtime" >> "$SHELL_PROFILE"
   echo "[[ -f $ENV_FILE ]] && source $ENV_FILE" >> "$SHELL_PROFILE"
   success "Shell profile updated: $SHELL_PROFILE"
 fi
 
 # ── Step 3: Register machine with service ────────────────────────────────────
-info "Step 3: Registering machine with E-Divin service …"
+info "Step 3: Registering machine with Pur2Divin Command Center ..."
 REG_BODY=$(cat <<JSON
 {
   "hostKey": "$HOST_KEY",
@@ -197,7 +245,7 @@ REG_BODY=$(cat <<JSON
   "hostType": "desktop",
   "squadKey": "$SQUAD_KEY",
   "squadDisplayName": "$SQUAD_KEY on $HOST_KEY",
-  "runtimeType": "$RUNTIME_TYPE",
+  "runtimeType": "$RUNTIME_API",
   "locationHint": "$RUNTIME_TYPE on $OS $ARCH",
   "productKey": "$PRODUCT_KEY"
 }
@@ -212,16 +260,19 @@ fi
 
 # ── Step 4: Write runner script ───────────────────────────────────────────────
 info "Step 4: Writing background runner …"
-RUNNER_SCRIPT="$INSTALL_DIR/runner.sh"
+RUNNER_SCRIPT="$WORKSPACE_ROOT/runtime/runner.sh"
 cat > "$RUNNER_SCRIPT" <<'RUNNER'
 #!/usr/bin/env bash
-# E-Divin background runner — polls for commands and dispatches to local agent
+# Pur2Divin background runner - polls for commands and dispatches to the local agent tool
 set -uo pipefail
 
-INSTALL_DIR="$HOME/.e-divin"
-ENV_FILE="$INSTALL_DIR/env"
-LOG_FILE="$INSTALL_DIR/runner.log"
+INSTALL_DIR="${P2D_WORKSPACE_ROOT:-$HOME/.pur2divin}"
+ENV_FILE="$INSTALL_DIR/config/env"
+LOG_FILE="$INSTALL_DIR/logs/runner.log"
 [[ -f "$ENV_FILE" ]] && source "$ENV_FILE"
+TOOL_EVENT_DIR="$INSTALL_DIR/hooks/events"
+VISIBLE_SESSION_INBOX="$INSTALL_DIR/inbox/visible-sessions"
+mkdir -p "$TOOL_EVENT_DIR" "$VISIBLE_SESSION_INBOX"
 
 SERVICE_URL="${E_DIVIN_AGENT_SERVICE_URL:-}"
 SECRET="${SERVICE_SHARED_SECRET:-}"
@@ -251,10 +302,54 @@ heartbeat() {
     "{\"squadKey\":\"$SQUAD\",\"runtimeType\":\"$RUNTIME\",\"status\":\"active\",\"message\":\"$(date '+%H:%M:%S') $RUNTIME runner polling\",\"productKey\":\"$PRODUCT\"}" >/dev/null
 }
 
-log "E-Divin $RUNTIME runner started (squad: $SQUAD, product: $PRODUCT)"
+process_tool_events() {
+  find "$TOOL_EVENT_DIR" -maxdepth 1 -type f -name '*.json' 2>/dev/null | sort | while read -r EVENT_FILE; do
+    EVENT_LINE=$(python3 - "$EVENT_FILE" <<'PY' 2>/dev/null
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as f:
+    data = json.load(f)
+fields = [
+    data.get("tool") or data.get("runtimeTool") or "agent-tool",
+    data.get("runtimeTool") or data.get("runtimeType") or "",
+    data.get("runtimeType") or "",
+    data.get("productKey") or "",
+    data.get("squadKey") or "",
+    data.get("hostKey") or "",
+    data.get("workspaceRoot") or "",
+    data.get("promptPath") or "",
+]
+print("\t".join(str(x) for x in fields))
+PY
+)
+    if [[ -z "$EVENT_LINE" ]]; then
+      mv "$EVENT_FILE" "$EVENT_FILE.failed" 2>/dev/null || true
+      continue
+    fi
+    IFS=$'\t' read -r TOOL RUNTIME_TOOL EVENT_RUNTIME EVENT_PRODUCT EVENT_SQUAD EVENT_HOST EVENT_WORKSPACE EVENT_PROMPT <<< "$EVENT_LINE"
+    [[ -z "$EVENT_PRODUCT" ]] && EVENT_PRODUCT="$PRODUCT"
+    [[ -z "$EVENT_SQUAD" ]] && EVENT_SQUAD="$SQUAD"
+    [[ -z "$EVENT_RUNTIME" ]] && EVENT_RUNTIME="$RUNTIME"
+    [[ -z "$RUNTIME_TOOL" ]] && RUNTIME_TOOL="$RUNTIME"
+    [[ -z "$EVENT_HOST" ]] && EVENT_HOST="$(hostname -s 2>/dev/null || hostname)"
+    [[ -z "$EVENT_WORKSPACE" ]] && EVENT_WORKSPACE="$INSTALL_DIR"
+    [[ -z "$EVENT_PROMPT" ]] && EVENT_PROMPT="$INSTALL_DIR/hooks/visible-session-startup-prompt.md"
+    SESSION_KEY="tool:$EVENT_PRODUCT:$EVENT_SQUAD:$RUNTIME_TOOL:$EVENT_HOST"
+    PACKET_PATH="$VISIBLE_SESSION_INBOX/$(date '+%Y%m%d-%H%M%S')-${RUNTIME_TOOL}.json"
+    cat > "$PACKET_PATH" <<JSON
+{"sessionKey":"$SESSION_KEY","productKey":"$EVENT_PRODUCT","squadKey":"$EVENT_SQUAD","runtimeType":"$EVENT_RUNTIME","runtimeTool":"$RUNTIME_TOOL","hostKey":"$EVENT_HOST","tool":"$TOOL","promptPath":"$EVENT_PROMPT","workspaceRoot":"$EVENT_WORKSPACE","instruction":"Open or continue the visible $TOOL session with the governed prompt at promptPath. Report evidence back through Command Center."}
+JSON
+    svc POST /automation/runner-heartbeat "{\"squadKey\":\"$EVENT_SQUAD\",\"runtimeType\":\"$EVENT_RUNTIME\",\"status\":\"active\",\"message\":\"Tool launch detected locally by squad runner: $TOOL\",\"productKey\":\"$EVENT_PRODUCT\",\"metadata\":{\"runtimeTool\":\"$RUNTIME_TOOL\",\"promptPath\":\"$EVENT_PROMPT\",\"packetPath\":\"$PACKET_PATH\",\"source\":\"local_tool_hook\"}}" >/dev/null
+    svc POST /runtime-sessions "{\"sessionKey\":\"$SESSION_KEY\",\"displayName\":\"$RUNTIME_TOOL visible session - $EVENT_PRODUCT / $EVENT_SQUAD\",\"agentKey\":\"local-squad-automation-runner-agent\",\"squadKey\":\"$EVENT_SQUAD\",\"runtimeType\":\"$EVENT_RUNTIME\",\"hostKey\":\"$EVENT_HOST\",\"sessionStatus\":\"active\",\"sessionRef\":\"$TOOL startup hook via local runner\",\"memoryPath\":\"$EVENT_WORKSPACE/config\",\"promptPath\":\"$EVENT_PROMPT\",\"inboxPath\":\"$EVENT_WORKSPACE/inbox\",\"lastPromptSummary\":\"Local squad runner registered visible session from tool startup hook.\",\"latestResponseSummary\":\"Runner wake and local prompt packet completed.\",\"adapterStatus\":\"local_hook_bridge_active\",\"productKey\":\"$EVENT_PRODUCT\"}" >/dev/null
+    log "Tool launch routed by runner: $TOOL -> $SESSION_KEY"
+    mv "$EVENT_FILE" "$EVENT_FILE.processed" 2>/dev/null || true
+  done
+}
+
+log "Pur2Divin $RUNTIME runner started (squad: $SQUAD, product: $PRODUCT)"
 
 while true; do
   heartbeat
+  process_tool_events
 
   # Fetch queued commands for this squad
   FEED=$(svc GET "/automation/runner-feed?squadKey=$SQUAD&productKey=$PRODUCT" "")
@@ -290,13 +385,13 @@ if [[ "$NO_DAEMON" == "false" ]]; then
 
   if [[ "$OS" == "Darwin" ]]; then
     # launchd plist
-    PLIST_PATH="$HOME/Library/LaunchAgents/com.e-divin.runner-$SQUAD_KEY.plist"
+    PLIST_PATH="$HOME/Library/LaunchAgents/com.pur2divin.runner-$PRODUCT_KEY-$SQUAD_KEY.plist"
     cat > "$PLIST_PATH" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key>         <string>com.e-divin.runner-$SQUAD_KEY</string>
+  <key>Label</key>         <string>com.pur2divin.runner-$PRODUCT_KEY-$SQUAD_KEY</string>
   <key>ProgramArguments</key>
   <array><string>/bin/bash</string><string>$RUNNER_SCRIPT</string></array>
   <key>EnvironmentVariables</key>
@@ -307,21 +402,21 @@ if [[ "$NO_DAEMON" == "false" ]]; then
   </dict>
   <key>RunAtLoad</key>     <true/>
   <key>KeepAlive</key>     <true/>
-  <key>StandardOutPath</key><string>$INSTALL_DIR/runner.log</string>
-  <key>StandardErrorPath</key><string>$INSTALL_DIR/runner-err.log</string>
+  <key>StandardOutPath</key><string>$WORKSPACE_ROOT/logs/runner.log</string>
+  <key>StandardErrorPath</key><string>$WORKSPACE_ROOT/logs/runner-err.log</string>
 </dict>
 </plist>
 PLIST
-    launchctl load "$PLIST_PATH" 2>/dev/null && success "launchd daemon loaded: com.e-divin.runner-$SQUAD_KEY" \
+    launchctl load "$PLIST_PATH" 2>/dev/null && success "launchd daemon loaded for $PRODUCT_KEY / $SQUAD_KEY" \
       || warn "launchctl load failed — run manually: bash $RUNNER_SCRIPT &"
 
   elif [[ "$OS" == "Linux" ]]; then
     # systemd user unit
     mkdir -p "$HOME/.config/systemd/user"
-    UNIT_FILE="$HOME/.config/systemd/user/e-divin-runner-${SQUAD_KEY}.service"
+    UNIT_FILE="$HOME/.config/systemd/user/pur2divin-runner-${PRODUCT_KEY}-${SQUAD_KEY}.service"
     cat > "$UNIT_FILE" <<UNIT
 [Unit]
-Description=E-Divin Squad Runner ($SQUAD_KEY - $RUNTIME_TYPE)
+Description=Pur2Divin Runner ($PRODUCT_KEY / $SQUAD_KEY / $RUNTIME_TYPE)
 After=network-online.target
 
 [Service]
@@ -336,8 +431,8 @@ Environment=HOME=$HOME
 WantedBy=default.target
 UNIT
     systemctl --user daemon-reload 2>/dev/null || true
-    systemctl --user enable --now "e-divin-runner-${SQUAD_KEY}.service" 2>/dev/null \
-      && success "systemd user service enabled: e-divin-runner-${SQUAD_KEY}" \
+    systemctl --user enable --now "pur2divin-runner-${PRODUCT_KEY}-${SQUAD_KEY}.service" 2>/dev/null \
+      && success "systemd user service enabled for $PRODUCT_KEY / $SQUAD_KEY" \
       || warn "systemd enable failed — run manually: bash $RUNNER_SCRIPT &"
   fi
 else
@@ -346,17 +441,201 @@ else
 fi
 
 # ── Step 6: Publish onboarding heartbeat ────────────────────────────────────
+if [[ "$NO_HOOKS" == "false" ]]; then
+  info "Step 6: Installing AI tool capability profile ..."
+  HOOK_ROOT="$WORKSPACE_ROOT/hooks"
+  mkdir -p "$HOOK_ROOT"
+  HOOK_SCRIPT="$HOOK_ROOT/p2d-tool-start.sh"
+  PROMPT_PATH="$HOOK_ROOT/visible-session-startup-prompt.md"
+  PROFILE_PATH="$HOOK_ROOT/tool-capability-profile.json"
+  HOOK_ENV="$HOOK_ROOT/tool-env"
+  HOOK_LOG="$WORKSPACE_ROOT/logs/tool-hook.log"
+  LAUNCHER_ROOT="$WORKSPACE_ROOT/launchers"
+  mkdir -p "$LAUNCHER_ROOT"
+
+  cat > "$PROMPT_PATH" <<EOF
+# Pur2Divin visible-session startup prompt
+
+Product: $PRODUCT_KEY
+Squad: $SQUAD_KEY
+Runtime: $RUNTIME_TYPE
+Host: $HOST_KEY
+
+Use this tool session as a visible, product-scoped agent workspace.
+
+Operating contract:
+- Command Center is the source of truth.
+- Use Swagger/OpenAPI from $SERVICE_URL/swagger and $SERVICE_URL/openapi.json.
+- Preserve product, squad, command, run, and correlation IDs.
+- Send evidence, blockers, prompt changes, reviews, and handoffs back through Command Center.
+- Do not bypass product governance, prompt review, approval, release, or repo gates.
+EOF
+
+  cat > "$HOOK_ENV" <<EOF
+export P2D_TOOL_CAPABILITY_PROFILE="$PROFILE_PATH"
+export P2D_TOOL_START_HOOK="$HOOK_SCRIPT"
+export P2D_VISIBLE_SESSION_PROMPT="$PROMPT_PATH"
+export P2D_COMMAND_CENTER_URL="$SERVICE_URL"
+export P2D_PRODUCT_KEY="$PRODUCT_KEY"
+export P2D_PRODUCT_ID="$PRODUCT_ID"
+export P2D_SQUAD_KEY="$SQUAD_KEY"
+export P2D_SQUAD_ID="$SQUAD_ID"
+export P2D_RELEASE_KEY="$RELEASE_KEY"
+export P2D_RUNTIME="$RUNTIME_TYPE"
+export P2D_WORKSPACE_ROOT="$WORKSPACE_ROOT"
+EOF
+  chmod 600 "$HOOK_ENV"
+
+  cat > "$HOOK_SCRIPT" <<'HOOK'
+#!/usr/bin/env bash
+set -uo pipefail
+TOOL="${1:-${P2D_RUNTIME:-agent-tool}}"
+WORKSPACE_ROOT="${P2D_WORKSPACE_ROOT:-$HOME/.pur2divin}"
+ENV_FILE="$WORKSPACE_ROOT/config/env"
+HOOK_ENV="$WORKSPACE_ROOT/hooks/tool-env"
+LOG_FILE="$WORKSPACE_ROOT/logs/tool-hook.log"
+EVENT_ROOT="$WORKSPACE_ROOT/hooks/events"
+mkdir -p "$EVENT_ROOT"
+[[ -f "$ENV_FILE" ]] && source "$ENV_FILE"
+[[ -f "$HOOK_ENV" ]] && source "$HOOK_ENV"
+SERVICE_URL="${P2D_COMMAND_CENTER_URL:-${E_DIVIN_AGENT_SERVICE_URL:-}}"
+SECRET="${P2D_ENROLLMENT_TOKEN:-${SERVICE_SHARED_SECRET:-}}"
+ACTOR="${P2D_ACTOR:-${E_DIVIN_ACTOR:-founder}}"
+SQUAD="${P2D_SQUAD_KEY:-${E_DIVIN_SQUAD_KEY:-}}"
+RUNTIME="${P2D_RUNTIME:-${E_DIVIN_RUNTIME_TYPE:-codex}}"
+PRODUCT="${P2D_PRODUCT_KEY:-${E_DIVIN_PRODUCT_KEY:-}}"
+HOST="${HOSTNAME:-$(hostname -s 2>/dev/null || hostname)}"
+
+log() { printf '[%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" >> "$LOG_FILE"; }
+svc_post() {
+  local path="$1" body="$2"
+  [[ -z "$SERVICE_URL" || -z "$SECRET" ]] && return 0
+  curl -sf -X POST \
+    -H "Authorization: Bearer $SECRET" \
+    -H "X-E-Divin-Actor: $ACTOR" \
+    -H "Content-Type: application/json" \
+    -d "$body" \
+    "${SERVICE_URL%/}$path" >/dev/null 2>>"$LOG_FILE" || true
+}
+
+EVENT_PATH="$EVENT_ROOT/$(date '+%Y%m%d-%H%M%S%3N')-$TOOL.json"
+cat > "$EVENT_PATH" <<JSON
+{"tool":"$TOOL","runtimeTool":"$RUNTIME","runtimeType":"$RUNTIME","productKey":"$PRODUCT","squadKey":"$SQUAD","hostKey":"$HOST","workspaceRoot":"$WORKSPACE_ROOT","promptPath":"$P2D_VISIBLE_SESSION_PROMPT","source":"tool_startup_hook","createdAt":"$(date -u '+%Y-%m-%dT%H:%M:%SZ')"}
+JSON
+
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl --user start "pur2divin-runner-${PRODUCT}-${SQUAD}.service" >/dev/null 2>&1 || true
+fi
+if command -v launchctl >/dev/null 2>&1; then
+  launchctl kickstart "gui/$(id -u)/com.pur2divin.runner-${PRODUCT}-${SQUAD}" >/dev/null 2>&1 || true
+fi
+
+log "Hook wrote local launch event for $TOOL: $EVENT_PATH"
+HOOK
+  chmod +x "$HOOK_SCRIPT"
+  LAUNCHER_PATH="$LAUNCHER_ROOT/start-$RUNTIME_TYPE.sh"
+  cat > "$LAUNCHER_PATH" <<EOF
+#!/usr/bin/env bash
+set -uo pipefail
+"$HOOK_SCRIPT" "$RUNTIME_TYPE"
+case "$RUNTIME_TYPE" in
+  codex)
+    if command -v codex >/dev/null 2>&1; then codex "\$@"; else echo "Codex CLI not found. Run: npm install -g @openai/codex"; fi
+    ;;
+  claude)
+    if command -v claude >/dev/null 2>&1; then claude "\$@"; else echo "Claude Code CLI not found. Run: npm install -g @anthropic-ai/claude-code"; fi
+    ;;
+  cursor)
+    if command -v cursor >/dev/null 2>&1; then cursor "\$@"; else echo "Cursor launcher not found. Enable the Cursor command-line launcher."; fi
+    ;;
+  copilot)
+    if command -v gh >/dev/null 2>&1; then
+      if [[ \$# -gt 0 ]]; then gh copilot "\$@"; else gh copilot --help; fi
+    else
+      echo "GitHub CLI not found. Install gh and authenticate with gh auth login."
+    fi
+    ;;
+  service)
+    echo "Pur2Divin service runner started. No interactive tool command is required."
+    ;;
+esac
+EOF
+  chmod +x "$LAUNCHER_PATH"
+
+  cat > "$PROFILE_PATH" <<EOF
+{
+  "productKey": "$PRODUCT_KEY",
+  "productId": "$PRODUCT_ID",
+  "squadKey": "$SQUAD_KEY",
+  "squadId": "$SQUAD_ID",
+  "releaseKey": "$RELEASE_KEY",
+  "runtime": "$RUNTIME_TYPE",
+  "runtimeType": "$RUNTIME_API",
+  "hostKey": "$HOST_KEY",
+  "workspaceRoot": "$WORKSPACE_ROOT",
+  "commandCenter": "$SERVICE_URL",
+  "swaggerUrl": "$SERVICE_URL/swagger",
+  "openapiUrl": "$SERVICE_URL/openapi.json",
+  "environmentFile": "$HOOK_ENV",
+  "hookScript": "$HOOK_SCRIPT",
+  "launcherScript": "$LAUNCHER_PATH",
+  "visibleSessionPrompt": "$PROMPT_PATH",
+  "localFolders": {
+    "config": "$WORKSPACE_ROOT/config",
+    "inbox": "$WORKSPACE_ROOT/inbox",
+    "outbox": "$WORKSPACE_ROOT/outbox",
+    "runtime": "$WORKSPACE_ROOT/runtime",
+    "logs": "$WORKSPACE_ROOT/logs",
+    "launchers": "$LAUNCHER_ROOT"
+  },
+  "tools": {
+    "codex": { "settingsArea": "Settings > Coding > Hooks", "startupHook": "$HOOK_SCRIPT codex", "launcher": "$LAUNCHER_PATH", "promptFile": "$PROMPT_PATH" },
+    "claude": { "settingsArea": "Developer / Claude Code hooks", "startupHook": "$HOOK_SCRIPT claude", "launcher": "$LAUNCHER_PATH", "promptFile": "$PROMPT_PATH" },
+    "copilot": { "settingsArea": "Agent startup terminal/task", "startupHook": "$HOOK_SCRIPT copilot", "launcher": "$LAUNCHER_PATH", "promptFile": "$PROMPT_PATH" },
+    "cursor": { "settingsArea": "Hooks / Rules / MCPs", "startupHook": "$HOOK_SCRIPT cursor", "launcher": "$LAUNCHER_PATH", "promptFile": "$PROMPT_PATH" }
+  }
+}
+EOF
+
+  cat > "$HOOK_ROOT/tool-hook-readme.md" <<EOF
+# Pur2Divin Agent Tool Capability Hook
+
+Run this command when $RUNTIME_TYPE starts:
+
+\`\`\`bash
+$HOOK_SCRIPT $RUNTIME_TYPE
+\`\`\`
+
+Preferred launcher:
+
+\`\`\`bash
+$LAUNCHER_PATH
+\`\`\`
+
+Visible-session prompt:
+
+$PROMPT_PATH
+EOF
+
+  success "Tool capability profile written: $PROFILE_PATH"
+  success "Tool startup hook written: $HOOK_SCRIPT"
+  success "Tool launcher written: $LAUNCHER_PATH"
+else
+  info "Skipping AI tool hooks and capability profile (--no-hooks)."
+fi
+
 svc_post "/automation/runner-heartbeat" \
-  "{\"squadKey\":\"$SQUAD_KEY\",\"runtimeType\":\"$RUNTIME_TYPE\",\"status\":\"active\",\"message\":\"Machine onboarded: $HOST_KEY ($OS $RUNTIME_TYPE)\",\"productKey\":\"$PRODUCT_KEY\"}" >/dev/null || true
+  "{\"squadKey\":\"$SQUAD_KEY\",\"runtimeType\":\"$RUNTIME_API\",\"status\":\"active\",\"message\":\"Machine onboarded: $HOST_KEY ($OS $RUNTIME_TYPE)\",\"productKey\":\"$PRODUCT_KEY\"}" >/dev/null || true
 
 echo ""
 success "═══════════════════════════════════════════════"
-success " E-Divin machine onboarding complete!"
+success " Pur2Divin machine onboarding complete!"
 success " Squad:   $SQUAD_KEY"
 success " Runtime: $RUNTIME_TYPE"
 success " Product: $PRODUCT_KEY"
-success " Logs:    $INSTALL_DIR/runner.log"
+success " Release: $RELEASE_KEY"
+success " Folder:  $WORKSPACE_ROOT"
 success "═══════════════════════════════════════════════"
 echo ""
-warn  "ACTION: Add SERVICE_SHARED_SECRET to your shell profile (~/.bashrc or ~/.zshrc)"
-warn  "  export SERVICE_SHARED_SECRET='your-secret-here'"
+success " Machine identity secret generated for this workspace."
+warn  "Keep the enrollment token private. Rotate it from Command Center if this machine is retired."

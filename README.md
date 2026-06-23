@@ -1,107 +1,163 @@
-# P2D Agentic Command Center — Machine Installer
+# Pur2Divin Agentic Command Center Installer
 
-> **One command to join your AI agent fleet.** No GitHub access needed. No manual setup.
+One guided installer connects a Windows, macOS, or Linux machine to one Pur2Divin product workspace and squad.
 
-This repo contains installer scripts for onboarding any machine into the **P2D Agentic Command Center** — the platform that lets a founder manage an entire AI-staffed product team across OpenAI Codex, Anthropic Claude Code, and GitHub Copilot.
+The installer is platform-neutral. E-Divin is an existing product workspace, not the platform default.
 
----
+## Supported Agent Tools
 
-## ⬇️ Download
+| Tool | Installer behavior |
+|---|---|
+| OpenAI Codex | Installs or detects Node.js and Codex CLI |
+| Anthropic Claude Code | Installs or detects Node.js and Claude Code |
+| GitHub Copilot | Installs or detects GitHub CLI and Copilot tooling |
+| Cursor | Detects the Cursor shell launcher and configures the Pur2Divin runner |
+| Service runner | Installs the background runner without an interactive coding tool |
 
-| OS | File | Instructions |
-|----|------|-------------|
-| **Windows** | [`windows/install.ps1`](windows/install.ps1) | [→ Windows guide](docs/windows.md) |
-| **macOS** | [`mac-linux/install.sh`](mac-linux/install.sh) | [→ macOS guide](docs/macos.md) |
-| **Linux** | [`mac-linux/install.sh`](mac-linux/install.sh) | [→ Linux guide](docs/linux.md) |
+## What The Installer Does
 
----
+1. Collects the product workspace, squad, user ID, runtime, and enrollment token.
+2. Refuses to assume E-Divin or any other product.
+3. Generates a unique machine identity secret.
+4. Installs or verifies the selected coding-agent tool.
+5. Registers the machine and squad against the selected product.
+6. Creates product-specific inbox, outbox, runtime, configuration, and log paths.
+7. Installs a persistent background runner:
+   - Windows Scheduled Task
+   - macOS launchd agent
+   - Linux systemd user service
+8. Publishes a health signal to Command Center.
+9. Writes a local AI tool capability profile, startup hook, and visible-session prompt:
+   - `hooks/tool-capability-profile.json`
+   - `hooks/p2d-tool-start.ps1` or `hooks/p2d-tool-start.sh`
+   - `hooks/visible-session-startup-prompt.md`
+   - `hooks/tool-env.cmd` or `hooks/tool-env`
 
-## What gets installed?
+The capability profile is the local copy of the Command Center-approved policy for the selected product, squad, runtime tool, hooks, prompts, MCP/API awareness, and visible-session registration. Use `--no-hooks` only when an enterprise desktop policy blocks tool startup hooks.
 
-| AI Tool | What the installer sets up |
-|---------|---------------------------|
-| **OpenAI Codex** | Node.js 20 + Codex CLI + squad runner background service |
-| **Anthropic Claude Code** | Node.js 20 + Claude Code CLI + squad runner background service |
-| **GitHub Copilot** | Node.js 20 + GitHub CLI + Copilot extension + squad runner |
-| **Service / Backend** | Node.js 20 + squad runner only |
+## Before Installation
 
-All options also:
-- Set machine environment variables (squad, product, service URL)
-- Register the machine in the Command Center
-- Start a background runner that polls for commands and routes them to the AI tool automatically
+In Pur2Divin Command Center:
 
----
+1. Open the required product workspace.
+2. Create or select the destination squad.
+3. Generate or obtain a short-lived enrollment token.
+4. Confirm the user ID that will own the machine registration.
 
-## Before you start — get these 2 things
+Never reuse a token from another organization or product.
 
-Your **founder** provides these from the Command Center dashboard:
+## Simplest Installation
 
-| What | Example |
-|------|---------|
-| `SERVICE_SHARED_SECRET` | `sk-xxxxxxxxxxxxxxxx` |
-| Squad key | `ui-squad`, `delivery-squad`, `backend-squad` |
+When Node.js 20 or newer is already installed:
 
----
-
-## Quick start
-
-### Windows (PowerShell)
-```powershell
-# 1. Download install.ps1 from this repo
-# 2. Open PowerShell as Administrator
-# 3. Run:
-$env:SERVICE_SHARED_SECRET = 'YOUR_SECRET'
-$env:E_DIVIN_ACTOR         = 'your-github-username'
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\Downloads\install.ps1" `
-  -Squad 'ui-squad' -Runtime 'codex'
-```
-
-### macOS / Linux (Terminal)
 ```bash
-# 1. Download install.sh from this repo
-# 2. Open Terminal
-# 3. Run:
-export SERVICE_SHARED_SECRET='YOUR_SECRET'
-export E_DIVIN_ACTOR='your-github-username'
-bash ~/Downloads/install.sh --squad ui-squad --runtime claude
+npx github:jogdandsainath/p2d-agentic-command-center-installer
 ```
 
-### One-liner (no download needed)
+This opens the same guided workflow on Windows, macOS, and Linux.
+
+## Windows
+
+Open PowerShell:
+
 ```powershell
-# Windows — run in PowerShell as Administrator
-$env:SERVICE_SHARED_SECRET='YOUR_SECRET'; $env:E_DIVIN_ACTOR='YOUR_USERNAME'
-iwr 'https://e-divin-agent-communication-service.vercel.app/install.ps1' -UseBasicParsing -OutFile "$env:TEMP\edv.ps1"
-powershell -ExecutionPolicy Bypass -File "$env:TEMP\edv.ps1" -Squad 'ui-squad' -Runtime 'codex'
+iwr 'https://raw.githubusercontent.com/jogdandsainath/p2d-agentic-command-center-installer/main/windows/install.ps1' `
+  -UseBasicParsing -OutFile "$env:TEMP\p2d-install.ps1"
+powershell -ExecutionPolicy Bypass -File "$env:TEMP\p2d-install.ps1"
 ```
+
+The guided installer asks for all required values. For automated installation:
+
+```powershell
+$env:P2D_ENROLLMENT_TOKEN = 'TOKEN_FROM_COMMAND_CENTER'
+$env:P2D_ACTOR = 'organization-user-id'
+powershell -ExecutionPolicy Bypass -File "$env:TEMP\p2d-install.ps1" `
+  -ProductKey 'product-workspace-key' `
+  -Squad 'squad-key' `
+  -Runtime 'codex'
+```
+
+## macOS Or Linux
+
 ```bash
-# macOS / Linux — run in Terminal
-export SERVICE_SHARED_SECRET='YOUR_SECRET' E_DIVIN_ACTOR='YOUR_USERNAME'
-curl -fsSL https://e-divin-agent-communication-service.vercel.app/install.sh | bash -s -- --squad ui-squad --runtime claude
+curl -fsSL \
+  'https://raw.githubusercontent.com/jogdandsainath/p2d-agentic-command-center-installer/main/mac-linux/install.sh' \
+  | bash
 ```
 
----
+For automated installation:
 
-## Detailed guides
+```bash
+export P2D_ENROLLMENT_TOKEN='TOKEN_FROM_COMMAND_CENTER'
+export P2D_ACTOR='organization-user-id'
+curl -fsSL \
+  'https://raw.githubusercontent.com/jogdandsainath/p2d-agentic-command-center-installer/main/mac-linux/install.sh' \
+  | bash -s -- \
+      --product 'product-workspace-key' \
+      --squad 'squad-key' \
+      --runtime 'claude'
+```
 
-- [Windows — all AI tools](docs/windows.md)
-- [macOS — all AI tools](docs/macos.md)
-- [Linux — all AI tools](docs/linux.md)
-- [Troubleshooting](docs/troubleshooting.md)
+To install without writing AI tool hook files:
 
----
+```bash
+npx github:jogdandsainath/p2d-agentic-command-center-installer --no-hooks
+```
 
-## After installation
+## Runtime Values
 
-1. Machine appears in **Command Center → Automation → Machine Runner Health**
-2. Founder sends a command from the dashboard
-3. Command is automatically routed to this machine's AI tool
-4. Result flows back to the Command Center timeline
+Use one of:
 
----
+```text
+codex
+claude
+copilot
+cursor
+service
+```
 
-## Logs
+## Installation Locations
 
-| OS | Log location |
-|----|-------------|
-| Windows | `%LOCALAPPDATA%\E-Divin\runner.log` |
-| macOS / Linux | `~/.e-divin/runner.log` |
+| OS | Runtime data |
+|---|---|
+| Windows | `%LOCALAPPDATA%\Pur2Divin` |
+| macOS / Linux | `~/.pur2divin` |
+
+Each installation is product- and squad-bound. Switching products requires a separate registration or a governed ownership transfer from Command Center.
+
+The generated Command Center command includes the product ID/key, squad ID/key,
+release or wave, and agentic tool. The installer detects the target OS and
+machine identity and creates:
+
+```text
+Pur2Divin/
+  workspaces/
+    <product-key>/
+      <release-key>/
+        <squad-key>/
+          <agentic-tool>/
+            <machine-key>/
+              config/
+              hooks/
+              inbox/
+              outbox/
+              runtime/
+              logs/
+```
+
+## Verification
+
+After installation:
+
+1. Open the selected product workspace.
+2. Go to **Automation**.
+3. Confirm the machine appears under runner health.
+4. Confirm its product, squad, runtime tool, and host key.
+5. Send a low-risk test command to that squad.
+6. Confirm the command reaches the local inbox and reports evidence back.
+
+See [docs/installation-guide.md](docs/installation-guide.md) for the full operator procedure, verification checklist, security rules, and recovery sequence.
+
+## Compatibility
+
+New installations use `P2D_*` configuration names. Legacy `E_DIVIN_*` aliases remain temporarily available so existing E-Divin runners continue operating during migration.
